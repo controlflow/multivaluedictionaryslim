@@ -579,7 +579,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
   }
 
   // todo: debug view
-  public struct ValuesList
+  [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
+  [DebuggerDisplay("Count = {Count}")]
+  public readonly struct ValuesList
   {
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
     private readonly int _version;
@@ -727,4 +729,18 @@ internal sealed class MultiValueDictionarySlimDebugView<TKey, TValue>
       return entries;
     }
   }
+}
+
+internal sealed class MultiValueDictionarySlimValueListDebugView<TKey, TValue>
+  where TKey : notnull
+{
+  private readonly MultiValueDictionarySlim<TKey, TValue>.ValuesList _valuesList;
+
+  public MultiValueDictionarySlimValueListDebugView(MultiValueDictionarySlim<TKey, TValue>.ValuesList valuesList)
+  {
+    _valuesList = valuesList;
+  }
+
+  [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
+  private TValue[] Entries => _valuesList.ToArray();
 }
