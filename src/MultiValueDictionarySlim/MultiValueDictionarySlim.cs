@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 // ReSharper disable IntroduceOptionalParameters.Global
 // ReSharper disable UseArrayEmptyMethod
+// ReSharper disable MemberHidesStaticFromOuterClass
 
 // ReSharper disable MergeConditionalExpression
 // ReSharper disable ConditionIsAlwaysTrueOrFalse
@@ -31,7 +32,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   private const int StartOfFreeList = -3;
 
-  private TValue[]? _values = s_emptyValues;
+  private TValue[] _values;
   private int _valuesFreeStartIndex;
   private int _valuesStoredCount;
 
@@ -84,10 +85,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       Initialize(keyCapacity);
     }
 
-    if (valueCapacity > 0)
-    {
-      ExpandValuesListOrCompact();
-    }
+    _values = valueCapacity > 0 ? new TValue[valueCapacity] : s_emptyValues;
 
     // first check for null to avoid forcing default comparer instantiation unnecessarily
     if (comparer != null && comparer != EqualityComparer<TKey>.Default)
@@ -127,8 +125,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
     else
     {
-      Debug.Assert(_values != null);
-
       // entry has values associated
       if (entry.Count < entry.Capacity)
       {
@@ -232,7 +228,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
           {
             if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
             {
-              Array.Clear(_values!, entry.StartIndex, entry.Count);
+              Array.Clear(_values, entry.StartIndex, entry.Count);
             }
 
             _valuesStoredCount -= entry.Count;
@@ -275,7 +271,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
     {
       Debug.Assert(_buckets != null, "_buckets should be non-null");
       Debug.Assert(_entries != null, "_entries should be non-null");
-      Debug.Assert(_values != null, "_values should be non-null");
 
       Array.Clear(_buckets, 0, _buckets.Length);
 
@@ -309,11 +304,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
     _entries = entries;
 
     return size;
-  }
-
-  private void InitializeValuesList(int capacity)
-  {
-    _values = new TValue[capacity];
   }
 
   private ref Entry GetOrCreateEntry(TKey key)
@@ -509,18 +499,37 @@ public class MultiValueDictionarySlim<TKey, TValue>
   // todo: when copying and compacting we should skip the "current" entry and put it last, so we can extend it last
   private void ExpandValuesListOrCompact()
   {
-    Debug.Assert(_values != null);
-
     var newCapacity = Math.Max(_values.Length * 2, DefaultValuesListSize);
 
     if (_valuesStoredCount > _values.Length / 2)
     {
+      var newArray = new TValue[newCapacity];
+      var newArrayIndex = 0;
 
-      //var newArray = new TValue[newCapacity];
+      var index = 0;
+      var count = (uint) _count;
 
-      // copy and compact
+      // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
+      // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
+      while ((uint) index < count)
+      {
+        ref var entry = ref _entries![index++];
 
-      Array.Resize(ref _values, _values!.Length * 2);
+        if (entry.Next >= -1)
+        {
+          Array.Copy(_values, entry.StartIndex, newArray, newArrayIndex, entry.Count);
+
+          // if less than half of capacity used - reduce the capacity in half
+
+          entry.StartIndex = newArrayIndex;
+          entry.Capacity = (entry.Count < entry.Capacity / 2) ? Math.Max(entry.Count * 2, 1) : entry.Capacity;
+
+          newArrayIndex += entry.Capacity;
+        }
+      }
+
+      _values = newArray;
+      _valuesFreeStartIndex = newArrayIndex;
     }
     else
     {
@@ -687,7 +696,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
-  public Enumerator GetEnumerator() => new Enumerator(this);
+  public Enumerator GetEnumerator() => new(this);
 
   public struct Enumerator
   {
@@ -779,7 +788,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
         if ((uint) index >= (uint) _count)
           ThrowHelper.ThrowArgumentOutOfRangeException(nameof(index));
 
-        return _dictionary._values![_startIndex + index];
+        return _dictionary._values[_startIndex + index];
       }
       // todo: implement set?
     }
@@ -806,7 +815,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
         var dictionary = _dictionary;
         if (_version == dictionary._version && (uint)_indexInList < (uint)_finalIndex)
         {
-          _current = dictionary._values![_indexInList];
+          _current = dictionary._values[_indexInList];
           _indexInList++;
           return true;
         }
@@ -834,7 +843,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
         return Array.Empty<TValue>();
 
       var array = new TValue[_count];
-      Array.Copy(_dictionary._values!, _startIndex, array, destinationIndex: 0, _count);
+      Array.Copy(_dictionary._values, _startIndex, array, destinationIndex: 0, _count);
       return array;
     }
   }
@@ -856,6 +865,40 @@ public class MultiValueDictionarySlim<TKey, TValue>
       return Values.Length == 1
         ? $"[{Key}, {Values[0]}]"
         : $"[{Key}, <Count = {Values.Length}>]";
+    }
+  }
+
+  public void TrimExcess()
+  {
+    if (_valuesStoredCount < _values.Length)
+    {
+      var newArray = new TValue[_valuesStoredCount];
+      var newArrayIndex = 0;
+
+      var index = 0;
+      var count = (uint) _count;
+
+      // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
+      // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
+      while ((uint) index < count)
+      {
+        ref var entry = ref _entries![index++];
+
+        if (entry.Next >= -1)
+        {
+          Array.Copy(_values, entry.StartIndex, newArray, newArrayIndex, entry.Count);
+
+          // if less than half of capacity used - reduce the capacity in half
+
+          entry.StartIndex = newArrayIndex;
+          entry.Capacity = entry.Count;
+
+          newArrayIndex += entry.Count;
+        }
+      }
+
+      _values = newArray;
+      _valuesFreeStartIndex = newArrayIndex;
     }
   }
 }

@@ -30,7 +30,7 @@ public class MultiValueDictionarySlimTests
 
     for (var operationsCount = _random.Next(0, 100); operationsCount >= 0; operationsCount--)
     {
-      switch (_random.Next(0, 10))
+      switch (_random.Next(0, 11))
       {
         case >= 0 and <= 7:
         {
@@ -76,6 +76,15 @@ public class MultiValueDictionarySlimTests
           Assert.AreEqual(0, dictionary.Count);
           Assert.AreEqual(0, dictionarySlim.Count);
           Assert.AreEqual(0, dictionarySlim.ValuesCount);
+          break;
+        }
+
+        case 10:
+        {
+          dictionary.TrimExcess();
+          dictionarySlim.TrimExcess();
+
+          Assert.AreEqual(dictionary.Count, dictionarySlim.Count);
           break;
         }
       }
