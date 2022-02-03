@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+// ReSharper disable IntroduceOptionalParameters.Global
+// ReSharper disable UseArrayEmptyMethod
 
 // ReSharper disable MergeConditionalExpression
 // ReSharper disable ConditionIsAlwaysTrueOrFalse
@@ -7,7 +10,7 @@ using System.Runtime.CompilerServices;
 namespace System.Collections.Generic;
 
 // todo: keys collection
-// todo: all values collection 
+// todo: all values collection
 
 [DebuggerTypeProxy(typeof(MultiValueDictionarySlimDebugView<,>))]
 [DebuggerDisplay("Count = {Count}")]
@@ -21,20 +24,20 @@ public class MultiValueDictionarySlim<TKey, TValue>
   private int _freeList;
   private int _freeCount;
   private int _version;
-  
+
   private IEqualityComparer<TKey>? _comparer;
-  
-  
-  
+
+
+
   private const int StartOfFreeList = -3;
 
   private TValue[]? _values = s_emptyValues;
   private int _valuesFreeStartIndex;
   private int _valuesStoredCount;
-  
+
   private const int DefaultValuesListSize = 4;
 
-  private static readonly TValue[] s_emptyValues = Array.Empty<TValue>();
+  private static readonly TValue[] s_emptyValues = new TValue[0];
 
   private struct Entry
   {
@@ -55,13 +58,50 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public override string ToString()
     {
+      if (StartIndex == 0 && Capacity == 0)
+        return "<empty>";
+
       return $"Entry [key={Key}, used={Count} of {Capacity}, range={StartIndex}-{StartIndex + Capacity}]";
     }
   }
-  
+
+  public MultiValueDictionarySlim()
+    : this(keyCapacity: 0, 0, null) { }
+
+  public MultiValueDictionarySlim(int keyCapacity, int valueCapacity)
+    : this(keyCapacity: keyCapacity, valueCapacity, null) { }
+
+  public MultiValueDictionarySlim(IEqualityComparer<TKey>? comparer)
+    : this(keyCapacity: 0, 0, comparer) { }
+
+  public MultiValueDictionarySlim(int keyCapacity, int valueCapacity, IEqualityComparer<TKey>? comparer)
+  {
+    if (keyCapacity < 0) ThrowHelper.ThrowArgumentOutOfRangeException(nameof(keyCapacity));
+    if (valueCapacity < 0) ThrowHelper.ThrowArgumentOutOfRangeException(nameof(valueCapacity));
+
+    if (keyCapacity > 0)
+    {
+      Initialize(keyCapacity);
+    }
+
+    if (valueCapacity > 0)
+    {
+      ExpandValuesListOrCompact();
+    }
+
+    // first check for null to avoid forcing default comparer instantiation unnecessarily
+    if (comparer != null && comparer != EqualityComparer<TKey>.Default)
+    {
+      _comparer = comparer;
+    }
+  }
+
   // TODO: constructors, remove field initializers?
-  
+
   public int Count => _count - _freeCount;
+  public int ValuesCount => _valuesStoredCount;
+
+  public IEqualityComparer<TKey> Comparer => _comparer ?? EqualityComparer<TKey>.Default;
 
   public void Add(TKey key, TValue value)
   {
@@ -72,11 +112,11 @@ public class MultiValueDictionarySlim<TKey, TValue>
       // entry was not allocated in the _values array
       // this is the most likely case - fresh key w/o any values added
 
-      if (_valuesFreeStartIndex == _values.Length)
+      if (_valuesFreeStartIndex == _values!.Length)
       {
         ExpandValuesListOrCompact();
       }
-        
+
       // allocate single item list first
       // we expect { 1 key - 1 value } to be the common scenario
       entry.StartIndex = _valuesFreeStartIndex;
@@ -119,7 +159,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
           if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
           {
-            Array.Clear(_values, entry.StartIndex, entry.Capacity); 
+            Array.Clear(_values, entry.StartIndex, entry.Capacity);
           }
 
           entry.StartIndex = _valuesFreeStartIndex;
@@ -143,7 +183,117 @@ public class MultiValueDictionarySlim<TKey, TValue>
     _valuesStoredCount++;
     _version++;
   }
-  
+
+  public bool Remove(TKey key)
+  {
+    if (key == null)
+    {
+      ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
+    }
+
+    if (_buckets != null)
+    {
+      Debug.Assert(_entries != null, "entries should be non-null");
+
+      uint collisionCount = 0;
+      var hashCode = (uint)(_comparer?.GetHashCode(key) ?? key.GetHashCode());
+
+      ref var bucket = ref GetBucket(hashCode);
+      var entries = _entries;
+      var last = -1;
+      var i = bucket - 1; // Value in buckets is 1-based
+
+      while (i >= 0)
+      {
+        ref var entry = ref entries[i];
+
+        if (entry.HashCode == hashCode && (_comparer?.Equals(entry.Key, key) ?? EqualityComparer<TKey>.Default.Equals(entry.Key, key)))
+        {
+          if (last < 0)
+          {
+            bucket = entry.Next + 1; // Value in buckets is 1-based
+          }
+          else
+          {
+            entries[last].Next = entry.Next;
+          }
+
+          Debug.Assert(
+            (StartOfFreeList - _freeList) < 0,
+            "shouldn't underflow because max hashtable length is MaxPrimeArrayLength = 0x7FEFFFFD(2146435069) _freelist underflow threshold 2147483646");
+          entry.Next = StartOfFreeList - _freeList;
+
+          if (RuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
+          {
+            entry.Key = default!;
+          }
+
+          if (entry.Count > 0)
+          {
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+            {
+              Array.Clear(_values!, entry.StartIndex, entry.Count);
+            }
+
+            _valuesStoredCount -= entry.Count;
+          }
+
+          entry.Count = 0;
+          entry.Capacity = 0;
+          entry.StartIndex = 0;
+
+          _freeList = i;
+          _freeCount++;
+          return true;
+        }
+
+        last = i;
+        i = entry.Next;
+
+        collisionCount++;
+        if (collisionCount > (uint)entries.Length)
+        {
+          // The chain of entries forms a loop; which means a concurrent update has happened.
+          // Break out of the loop and throw, rather than looping forever.
+          ThrowHelper.ThrowInvalidOperationException_ConcurrentOperationsNotSupported();
+        }
+      }
+    }
+
+    return false;
+  }
+
+  public bool ContainsKey(TKey key)
+  {
+    return !Unsafe.IsNullRef(ref FindEntry(key));
+  }
+
+  public void Clear()
+  {
+    var count = _count;
+    if (count > 0)
+    {
+      Debug.Assert(_buckets != null, "_buckets should be non-null");
+      Debug.Assert(_entries != null, "_entries should be non-null");
+      Debug.Assert(_values != null, "_values should be non-null");
+
+      Array.Clear(_buckets, 0, _buckets.Length);
+
+      _count = 0;
+      _freeList = -1;
+      _freeCount = 0;
+      Array.Clear(_entries, 0, count);
+
+      if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+      {
+        Array.Clear(_values, 0, _valuesFreeStartIndex);
+      }
+
+      _valuesStoredCount = 0;
+      _valuesFreeStartIndex = 0;
+    }
+  }
+
   private int Initialize(int capacity)
   {
     var size = HashHelpers.GetPrime(capacity);
@@ -159,6 +309,11 @@ public class MultiValueDictionarySlim<TKey, TValue>
     _entries = entries;
 
     return size;
+  }
+
+  private void InitializeValuesList(int capacity)
+  {
+    _values = new TValue[capacity];
   }
 
   private ref Entry GetOrCreateEntry(TKey key)
@@ -303,12 +458,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
     entry.Key = key;
     bucket = index + 1; // Value in _buckets is 1-based
 
-    // users must do this
+    // users of this method must do this
     // _version++;
 
     return ref entry;
   }
-  
+
   [MethodImpl(MethodImplOptions.AggressiveInlining)]
   private ref int GetBucket(uint hashCode)
   {
@@ -357,10 +512,10 @@ public class MultiValueDictionarySlim<TKey, TValue>
     Debug.Assert(_values != null);
 
     var newCapacity = Math.Max(_values.Length * 2, DefaultValuesListSize);
-    
+
     if (_valuesStoredCount > _values.Length / 2)
     {
-      
+
       //var newArray = new TValue[newCapacity];
 
       // copy and compact
@@ -379,9 +534,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
         }
 
 
-        
+
         // we can compact the list in-place
-      
+
         Array.Resize(ref _values, newCapacity);
       }
     }
@@ -527,7 +682,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       {
         return new ValuesList(this, entry.StartIndex, entry.Count);
       }
-      
+
       return new ValuesList(this);
     }
   }
@@ -555,7 +710,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       {
         ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
       }
-      
+
       // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
       // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
       while ((uint) _index < (uint) _dictionary._count)
@@ -569,12 +724,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
           return true;
         }
       }
-      
+
       _index = _dictionary._count + 1;
       _current = default;
       return false;
     }
-    
+
     public KeyValuePair<TKey, ValuesList> Current => _current;
   }
 
