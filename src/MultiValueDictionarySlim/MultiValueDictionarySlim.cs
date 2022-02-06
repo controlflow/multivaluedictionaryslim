@@ -103,6 +103,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
   public int Count => _count - _freeCount;
   public int ValuesCount => _valuesStoredCount;
   public int ValuesUsedCapacity => _valuesCapacityUsed;
+  public bool ValuesListHasGaps => _valuesCapacityUsed != _valuesFreeStartIndex;
 
   public IEqualityComparer<TKey> Comparer => _comparer ?? EqualityComparer<TKey>.Default;
 
@@ -163,12 +164,14 @@ public class MultiValueDictionarySlim<TKey, TValue>
         else if (_valuesFreeStartIndex + newCapacity < _values.Length)
         {
           // value list can be relocated in the tail free space and expanded
-          Array.Copy(_values, entry.StartIndex, _values, _valuesFreeStartIndex, entry.Capacity);
+          Array.Copy(_values, entry.StartIndex, _values, _valuesFreeStartIndex, entry.Count);
 
           if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
           {
-            Array.Clear(_values, entry.StartIndex, entry.Capacity);
+            Array.Clear(_values, entry.StartIndex, entry.Count);
           }
+
+          // todo: store gap address
 
           entry.StartIndex = _valuesFreeStartIndex;
           _valuesCapacityUsed += newCapacity - entry.Capacity;
@@ -192,7 +195,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
     _valuesStoredCount++;
     _version++;
 
-    Debug.Assert(_valuesCapacityUsed >= _valuesStoredCount);
+    Debug.Assert(_valuesStoredCount <= _valuesCapacityUsed);
+    Debug.Assert(_valuesCapacityUsed <= _values.Length);
   }
 
   public bool Remove(TKey key)
@@ -618,12 +622,15 @@ public class MultiValueDictionarySlim<TKey, TValue>
     {
       ref var lastEntry = ref entries[entryIndex];
 
-      lastEntry.StartIndex = newArrayIndex;
-
-      if (lastEntry.Capacity > 0)
+      if (lastEntry.Capacity == 0)
+      {
+        lastEntry.StartIndex = newArrayIndex;
+      }
+      else
       {
         Array.Copy(_values, lastEntry.StartIndex, newArray, newArrayIndex, lastEntry.Count);
 
+        lastEntry.StartIndex = newArrayIndex;
         newArrayIndex += lastEntry.Capacity;
       }
     }

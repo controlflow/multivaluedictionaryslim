@@ -104,9 +104,9 @@ public class MultiValueDictionarySlimTests
 
     if (dictionarySlim.ValuesCapacity > 0)
     {
-      fillRatios.Add(dictionarySlim.ValuesCount / (double) dictionarySlim.ValuesCapacity);
-      usedCapacities.Add(dictionarySlim.ValuesUsedCapacity / (double) dictionarySlim.ValuesCapacity);
-      totalCapacity += dictionarySlim.ValuesCapacity;
+      _fillRatios.Add(dictionarySlim.ValuesCount / (double) dictionarySlim.ValuesCapacity);
+      _usedCapacities.Add(dictionarySlim.ValuesUsedCapacity / (double) dictionarySlim.ValuesCapacity);
+      _totalCapacity += dictionarySlim.ValuesCapacity;
     }
 
     //dictionarySlim.TrimExcess();
@@ -133,7 +133,7 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test, Repeat(1000)]
-  public void CapacityExpectations1()
+  public void CapacityExpectation_OneValuePerKey()
   {
     var keys = new HashSet<int>();
     var dictionarySlim = new MultiValueDictionarySlim<int, string>();
@@ -153,7 +153,7 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test, Repeat(1000)]
-  public void CapacityExpectations2()
+  public void CapacityExpectation_OneKeyManyValues()
   {
     var dictionarySlim = new MultiValueDictionarySlim<int, string>();
     var key = _random.Next(0, 10000);
@@ -165,19 +165,70 @@ public class MultiValueDictionarySlimTests
     }
 
     Assert.AreEqual(valuesCount, dictionarySlim.ValuesCount);
-    Assert.IsTrue(valuesCount * 2 >= dictionarySlim.ValuesCapacity);
+    Assert.IsTrue(Math.Max(valuesCount * 2, 4) >= dictionarySlim.ValuesCapacity);
   }
 
-  private List<double> fillRatios = new List<double>();
-  private List<double> usedCapacities = new List<double>();
-  private int totalCapacity;
+  [Test, Repeat(1000)]
+  public void CapacityExpectation_MultipleValuesPerKeyInOrderHasNoGaps()
+  {
+    var keys = new HashSet<int>();
+    var dictionarySlim = new MultiValueDictionarySlim<int, string>();
+
+    for (var operationsCount = _random.Next(0, 100); operationsCount >= 0; operationsCount--)
+    {
+      int key;
+      do
+      {
+        key = _random.Next(0, 10000);
+      }
+      while (!keys.Add(key));
+
+      for (var valuesCount = _random.Next(0, 100); valuesCount >= 0; valuesCount--)
+      {
+        dictionarySlim.Add(key, RandomString());
+      }
+    }
+
+    Assert.IsTrue(!dictionarySlim.ValuesListHasGaps);
+  }
+
+  [Test]
+  [Repeat(100)]
+  public void Consistency()
+  {
+    var dictionarySlim = new MultiValueDictionarySlim<int, int>();
+
+    for (var operationsCount = _random.Next(0, 20); operationsCount >= 0; operationsCount--)
+    {
+      var key = _random.Next(1, 10);
+      dictionarySlim.Add(key, key * 100 + dictionarySlim[key].Count);
+      AssertConsistent();
+    }
+
+    void AssertConsistent()
+    {
+      foreach (var (key, values) in dictionarySlim)
+      {
+        int x = key * 100;
+        foreach (var i in values.ToArray())
+        {
+          Assert.AreEqual(x, i);
+          x++;
+        }
+      }
+    }
+  }
+
+  private readonly List<double> _fillRatios = new();
+  private readonly List<double> _usedCapacities = new();
+  private int _totalCapacity;
 
   [OneTimeTearDown]
   public void TearDown()
   {
-    Console.WriteLine($"Fill ratio: {fillRatios.Average():P}");
-    Console.WriteLine($"Used capacity: {usedCapacities.Average():P}");
-    Console.WriteLine($"Total capacity: {totalCapacity}");
+    Console.WriteLine($"Fill ratio: {_fillRatios.Average():P}");
+    Console.WriteLine($"Used capacity: {_usedCapacities.Average():P}");
+    Console.WriteLine($"Total capacity: {_totalCapacity}");
   }
 
   private string RandomString()
