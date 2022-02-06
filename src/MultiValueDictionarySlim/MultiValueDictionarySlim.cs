@@ -40,9 +40,14 @@ public class MultiValueDictionarySlim<TKey, TValue>
   private int _valuesCapacityUsed;
   private int _valuesStoredCount;
 
+  private int _valuesGapStartOffset;
+  private int _valuesGapCapacity;
+
   private const int DefaultValuesListSize = 4;
 
   private static readonly TValue[] s_emptyValues = new TValue[0];
+
+
 
   private struct Entry
   {
@@ -150,6 +155,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
         // values list is full, must increase increase it's size
         var newCapacity = entry.Capacity * 2;
+        Debug.Assert(newCapacity > 0);
 
         if (entry.StartIndex + entry.Capacity == _valuesFreeStartIndex
             && entry.StartIndex + newCapacity <= _values.Length)
@@ -159,6 +165,33 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
           _valuesCapacityUsed += newCapacity - entry.Capacity;
           _valuesFreeStartIndex += newCapacity - entry.Capacity;
+          entry.Capacity = newCapacity;
+        }
+        else if (newCapacity <= _valuesGapCapacity)
+        {
+          // value list can be fitted in the gap of free space
+
+          var gapStartOffset = _valuesGapStartOffset;
+          Array.Copy(_values, entry.StartIndex, _values, gapStartOffset, entry.Count);
+
+          if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+          {
+            Array.Clear(_values, entry.StartIndex, entry.Count);
+          }
+
+          // update gap size
+          _valuesGapStartOffset += newCapacity;
+          _valuesGapCapacity -= newCapacity;
+
+          // store gap location if freed space is bigger then left in the gap
+          if (entry.Capacity > _valuesGapCapacity)
+          {
+            _valuesGapStartOffset = entry.StartIndex;
+            _valuesGapCapacity = entry.Capacity;
+          }
+
+          entry.StartIndex = gapStartOffset;
+          _valuesCapacityUsed += newCapacity - entry.Capacity;
           entry.Capacity = newCapacity;
         }
         else if (_valuesFreeStartIndex + newCapacity < _values.Length)
@@ -171,7 +204,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
             Array.Clear(_values, entry.StartIndex, entry.Count);
           }
 
-          // todo: store gap address
+          // store gap location
+          if (entry.Capacity > _valuesGapCapacity)
+          {
+            _valuesGapCapacity = entry.Capacity;
+            _valuesGapStartOffset = entry.StartIndex;
+          }
 
           entry.StartIndex = _valuesFreeStartIndex;
           _valuesCapacityUsed += newCapacity - entry.Capacity;
@@ -599,11 +637,13 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     while ((uint) index < count)
     {
+      // skip currently modified list
+      /*
       if (index == entryIndex)
       {
         index++;
         continue;
-      }
+      }*/
 
       ref var entry = ref entries[index++];
 
@@ -619,6 +659,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
       }
     }
 
+    // copy last
+    /*
     {
       ref var lastEntry = ref entries[entryIndex];
 
@@ -634,10 +676,13 @@ public class MultiValueDictionarySlim<TKey, TValue>
         newArrayIndex += lastEntry.Capacity;
       }
     }
+    */
 
     _values = newArray;
     _valuesFreeStartIndex = newArrayIndex;
     _valuesCapacityUsed = newArrayIndex;
+    _valuesGapCapacity = 0;
+    _valuesGapStartOffset = 0;
 
     Debug.Assert(_valuesStoredCount <= _valuesCapacityUsed);
     Debug.Assert(_valuesCapacityUsed <= _values.Length);

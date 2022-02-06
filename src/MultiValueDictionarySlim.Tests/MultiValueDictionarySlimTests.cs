@@ -198,9 +198,9 @@ public class MultiValueDictionarySlimTests
   {
     var dictionarySlim = new MultiValueDictionarySlim<int, int>();
 
-    for (var operationsCount = _random.Next(0, 20); operationsCount >= 0; operationsCount--)
+    for (var operationsCount = _random.Next(0, 100); operationsCount >= 0; operationsCount--)
     {
-      var key = _random.Next(1, 10);
+      var key = _random.Next(1, 20);
       dictionarySlim.Add(key, key * 100 + dictionarySlim[key].Count);
       AssertConsistent();
     }
