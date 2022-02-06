@@ -4,7 +4,7 @@ namespace OneToListMap.Tests;
 
 public class MultiValueDictionarySlimTests
 {
-  private readonly Random _random = new(43434); // 43435
+  private readonly Random _random = new(43431); // 43435
 
   [Test]
   [Repeat(1000)]
@@ -32,7 +32,7 @@ public class MultiValueDictionarySlimTests
     Assert.AreEqual(0, dictionarySlim.Count);
     Assert.AreEqual(0, dictionarySlim.ValuesCount);
 
-    for (var operationsCount = _random.Next(0, 1000); operationsCount >= 0; operationsCount--)
+    for (var operationsCount = _random.Next(0, 2000); operationsCount >= 0; operationsCount--)
     {
       switch (_random.Next(0, 20))
       {
@@ -217,6 +217,28 @@ public class MultiValueDictionarySlimTests
         }
       }
     }
+  }
+
+  [Test]
+  public void SameHash()
+  {
+    var dictionarySlim = new MultiValueDictionarySlim<string, int>(DumbEqualityComparer<string>.Instance);
+
+    dictionarySlim.Add("aaa", 1);
+    dictionarySlim.Add("aaa", 2);
+    dictionarySlim.Add("bbb", 5);
+    dictionarySlim.Add("bbb", 6);
+
+    ;
+  }
+
+  private sealed class DumbEqualityComparer<T> : IEqualityComparer<T>
+  {
+    private DumbEqualityComparer() { }
+    public static IEqualityComparer<T> Instance { get; } = new DumbEqualityComparer<T>();
+
+    public bool Equals(T? x, T? y) => EqualityComparer<T>.Default.Equals(x, y);
+    public int GetHashCode(T obj) => 42;
   }
 
   private readonly List<double> _fillRatios = new();

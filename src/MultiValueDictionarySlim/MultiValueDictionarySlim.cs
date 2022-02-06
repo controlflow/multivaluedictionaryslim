@@ -40,6 +40,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
   private int _valuesCapacityUsed;
   private int _valuesStoredCount;
 
+  private List<(int, int)> gaps = new List<(int, int)>();
+
   private int _valuesGapStartOffset;
   private int _valuesGapCapacity;
 
@@ -62,9 +64,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public TKey Key;
 
-    public int StartIndex;
-    public int Capacity;
-    public int Count;
+    public int StartIndex; // can be 0
+    public int Capacity; // only 0 for newly-created and not initialized entries
+    public int Count; // only 0 for newly-created and not-initialized entries
 
     public override string ToString()
     {
@@ -293,6 +295,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
           _valuesCapacityUsed -= entry.Capacity;
 
+          // important!
           entry.Count = 0;
           entry.Capacity = 0;
           entry.StartIndex = 0;
@@ -508,6 +511,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
     entry.Key = key;
     bucket = index + 1; // Value in _buckets is 1-based
 
+    //entry.Capacity = ;
+
     // users of this method must do this
     // _version++;
 
@@ -569,14 +574,22 @@ public class MultiValueDictionarySlim<TKey, TValue>
       return;
     }
 
-    // todo: stored values count is different from consumed capacity
+    if (_valuesCapacityUsed < _values.Length / 2)
+    {
+      // todo: this is not optimized, must be done in-place
+      ResizeValuesAndCompactWhileCopying(entryIndex, _values.Length, extraCapacity);
+    }
+    else
+    {
+      var newCapacity = Math.Max(
+        Math.Max(_valuesCapacityUsed + extraCapacity, _values.Length * 2),
+        DefaultValuesListSize);
 
+      ResizeValuesAndCompactWhileCopying(entryIndex, newCapacity, extraCapacity);
+    }
 
-    var newCapacity = Math.Max(
-      Math.Max(_valuesCapacityUsed + extraCapacity, _values.Length * 2),
-      DefaultValuesListSize);
+    // 1, 2, 4, 8, 16
 
-    ResizeValuesAndCompactWhileCopying(entryIndex, newCapacity, extraCapacity);
     return;
 
     var map = this.ValueListMapView;
@@ -622,7 +635,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       //var newCapacity = Math.Max(_values.Length * 2, DefaultValuesListSize);
 
-      Array.Resize(ref _values, newCapacity);
+      //Array.Resize(ref _values, newCapacity);
     }
   }
 
