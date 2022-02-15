@@ -25,6 +25,8 @@ public class MultiValueDictionarySlimTests
     //     keyCapacity: _random.Next(0, 100), valueCapacity: _random.Next(0, 100), CustomIntComparer.Instance)
     // };
 
+    //Console.WriteLine("=========================");
+
     var dictionarySlim = new MultiValueDictionarySlim<int, string>();
 
     var keysPerCollection = _random.Next(1, 20);
@@ -32,7 +34,7 @@ public class MultiValueDictionarySlimTests
     Assert.AreEqual(0, dictionarySlim.Count);
     Assert.AreEqual(0, dictionarySlim.ValuesCount);
 
-    for (var operationsCount = _random.Next(0, 2000); operationsCount >= 0; operationsCount--)
+    for (var operationsCount = _random.Next(0, 500); operationsCount >= 0; operationsCount--)
     {
       switch (_random.Next(0, 20))
       {
@@ -50,10 +52,14 @@ public class MultiValueDictionarySlimTests
 
           Assert.AreEqual(dictionary.Count, dictionarySlim.Count);
           Assert.AreEqual(valuesCount + 1, dictionarySlim.ValuesCount);
+
+          //Console.WriteLine("add");
+          //Console.WriteLine(dictionarySlim.ValueListMapView);
           break;
         }
 
-        case 18 when dictionary.Count > 0:
+        case 18 when false:
+        //case 18 when dictionary.Count > 0:
         {
           var index = _random.Next(0, dictionary.Count);
           var keyToRemove = dictionary.Keys.ElementAt(index);
@@ -69,6 +75,9 @@ public class MultiValueDictionarySlimTests
           Assert.AreEqual(r1, r2);
           Assert.AreEqual(dictionary.Count, dictionarySlim.Count);
           Assert.AreEqual(valuesCount - itemsCount, dictionarySlim.ValuesCount);
+
+          Console.WriteLine("remove");
+          Console.WriteLine(dictionarySlim.ValueListMapView);
           break;
         }
 
@@ -112,6 +121,8 @@ public class MultiValueDictionarySlimTests
     //dictionarySlim.TrimExcess();
 
     Console.WriteLine(dictionarySlim.ValueListMapView);
+
+    //throw null;
 
     AssertEqual(dictionarySlim, dictionary);
   }

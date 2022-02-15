@@ -574,10 +574,11 @@ public class MultiValueDictionarySlim<TKey, TValue>
       return;
     }
 
-    if (_valuesCapacityUsed < _values.Length / 2)
+    if (_valuesCapacityUsed + extraCapacity < _values.Length * 0.7)
     {
       // todo: this is not optimized, must be done in-place
       ResizeValuesAndCompactWhileCopying(entryIndex, _values.Length, extraCapacity);
+      Console.WriteLine("COMPACT");
     }
     else
     {
@@ -651,12 +652,11 @@ public class MultiValueDictionarySlim<TKey, TValue>
     while ((uint) index < count)
     {
       // skip currently modified list
-      /*
       if (index == entryIndex)
       {
         index++;
         continue;
-      }*/
+      }
 
       ref var entry = ref entries[index++];
 
@@ -665,7 +665,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
         Array.Copy(_values, entry.StartIndex, newArray, newArrayIndex, entry.Count);
 
         // if less than half of value list capacity used - reduce the capacity to twice the used count
-        entry.Capacity = (entry.Count < entry.Capacity / 2) ? Math.Max(entry.Count * 2, 1) : entry.Capacity;
+        //entry.Capacity = (entry.Count < entry.Capacity / 2) ? Math.Max(entry.Count * 2, 1) : entry.Capacity;
+        if (entry.Capacity - entry.Count > 4)
+          entry.Capacity = entry.Count + 4;
+        else
+          entry.Capacity = entry.Capacity; //Math.Max(entry.Count * 2, 1);
+
         entry.StartIndex = newArrayIndex;
 
         newArrayIndex += entry.Capacity;
@@ -673,7 +678,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
 
     // copy last
-    /*
     {
       ref var lastEntry = ref entries[entryIndex];
 
@@ -689,7 +693,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
         newArrayIndex += lastEntry.Capacity;
       }
     }
-    */
 
     _values = newArray;
     _valuesFreeStartIndex = newArrayIndex;
