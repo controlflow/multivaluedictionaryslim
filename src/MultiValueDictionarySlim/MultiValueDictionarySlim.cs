@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -40,16 +38,27 @@ public class MultiValueDictionarySlim<TKey, TValue>
   private int _valuesCapacityUsed;
   private int _valuesStoredCount;
 
-  private List<(int, int)> gaps = new List<(int, int)>();
+  // sorted list of non-contacting gaps, ordered by increasing capacity
+  private Gap[]? _gaps;
+  private static Gap s_emptyGap;
 
-  private int _valuesGapStartOffset;
-  private int _valuesGapCapacity;
+  private struct Gap
+  {
+    public int StartOffset;
+    public int Capacity;
+
+    public Gap(int startOffset, int capacity)
+    {
+      StartOffset = startOffset;
+      Capacity = capacity;
+    }
+
+    public override string ToString() => $"(start: {StartOffset}, capacity: {Capacity})";
+  }
 
   private const int DefaultValuesListSize = 4;
 
   private static readonly TValue[] s_emptyValues = new TValue[0];
-
-
 
   private struct Entry
   {
@@ -127,116 +136,289 @@ public class MultiValueDictionarySlim<TKey, TValue>
       // entry was not allocated in the _values array
       // this is the most likely case - fresh key w/o any values added
 
-      if (_valuesFreeStartIndex == _values.Length)
+      var targetIndex = _valuesFreeStartIndex;
+      if (targetIndex == _values.Length) // value list is full
       {
-        ExpandValuesListOrCompact(entryIndex);
-        Debug.Assert(_valuesFreeStartIndex < _values.Length);
+        var gapIndex = TryAllocateInGap();
+        if (gapIndex >= 0)
+        {
+          targetIndex = gapIndex;
+          _valuesFreeStartIndex--; // hack to share the code below
+        }
+        else
+        {
+          ExpandValuesListOrCompact(entryIndex);
+          Debug.Assert(_valuesFreeStartIndex < _values.Length);
+        }
       }
 
       // allocate single item list first
       // we expect { 1 key - 1 value } to be the common scenario
-      entry.StartIndex = _valuesFreeStartIndex;
+      entry.StartIndex = targetIndex;
       entry.Capacity = 1;
-      _values[_valuesFreeStartIndex] = value;
+      _values[targetIndex] = value;
       entry.Count = 1;
       _valuesFreeStartIndex++;
       _valuesCapacityUsed++;
     }
-    else
+    else // entry has values associated
     {
-      // entry has values associated
-      if (entry.Count < entry.Capacity)
+      if (entry.Count >= entry.Capacity)
       {
-        // there is a free space inside a list, simply put the value and increase the entry count
-        _values[entry.StartIndex + entry.Count] = value;
-        entry.Count++;
-      }
-      else
-      {
-        ExpandValueListToAdd:
-
-        // values list is full, must increase increase it's size
-        var newCapacity = entry.Capacity * 2;
-        Debug.Assert(newCapacity > 0);
-
-        if (entry.StartIndex + entry.Capacity == _valuesFreeStartIndex
-            && entry.StartIndex + newCapacity <= _values.Length)
-        {
-          // value list is the last list before free space
-          // and we can increase it's capacity w/o moving the data
-
-          _valuesCapacityUsed += newCapacity - entry.Capacity;
-          _valuesFreeStartIndex += newCapacity - entry.Capacity;
-          entry.Capacity = newCapacity;
-        }
-        else if (newCapacity <= _valuesGapCapacity)
-        {
-          // value list can be fitted in the gap of free space
-
-          var gapStartOffset = _valuesGapStartOffset;
-          Array.Copy(_values, entry.StartIndex, _values, gapStartOffset, entry.Count);
-
-          if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
-          {
-            Array.Clear(_values, entry.StartIndex, entry.Count);
-          }
-
-          // update gap size
-          _valuesGapStartOffset += newCapacity;
-          _valuesGapCapacity -= newCapacity;
-
-          // store gap location if freed space is bigger then left in the gap
-          if (entry.Capacity > _valuesGapCapacity)
-          {
-            _valuesGapStartOffset = entry.StartIndex;
-            _valuesGapCapacity = entry.Capacity;
-          }
-
-          entry.StartIndex = gapStartOffset;
-          _valuesCapacityUsed += newCapacity - entry.Capacity;
-          entry.Capacity = newCapacity;
-        }
-        else if (_valuesFreeStartIndex + newCapacity < _values.Length)
-        {
-          // value list can be relocated in the tail free space and expanded
-          Array.Copy(_values, entry.StartIndex, _values, _valuesFreeStartIndex, entry.Count);
-
-          if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
-          {
-            Array.Clear(_values, entry.StartIndex, entry.Count);
-          }
-
-          // store gap location
-          if (entry.Capacity > _valuesGapCapacity)
-          {
-            _valuesGapCapacity = entry.Capacity;
-            _valuesGapStartOffset = entry.StartIndex;
-          }
-
-          entry.StartIndex = _valuesFreeStartIndex;
-          _valuesCapacityUsed += newCapacity - entry.Capacity;
-          entry.Capacity = newCapacity;
-          _valuesFreeStartIndex += newCapacity;
-        }
-        else
-        {
-          // not enough space to put the resized value list
-          ExpandValuesListOrCompact(entryIndex, extraCapacity: 1);
-          goto ExpandValueListToAdd;
-        }
-
+        ExpandEntryList(ref entry, entryIndex);
         Debug.Assert(entry.Count < entry.Capacity);
-
-        _values[entry.StartIndex + entry.Count] = value;
-        entry.Count++;
       }
+
+      // there is a free space inside a list, simply put the value and increase the entry count
+      _values[entry.StartIndex + entry.Count] = value;
+      entry.Count++;
     }
 
     _valuesStoredCount++;
     _version++;
 
+    if (_valuesStoredCount > _valuesCapacityUsed)
+    {
+      GC.KeepAlive(this);
+    }
+
     Debug.Assert(_valuesStoredCount <= _valuesCapacityUsed);
     Debug.Assert(_valuesCapacityUsed <= _values.Length);
+  }
+
+  private int TryAllocateInGap()
+  {
+    var gaps = _gaps;
+    if (gaps != null)
+    {
+      for (var index = 0; index < gaps.Length; index++)
+      {
+        ref var gap = ref gaps[index];
+        if (gap.Capacity > 0)
+        {
+          var startOffset = gap.StartOffset;
+          gap.StartOffset++;
+          gap.Capacity--;
+          return startOffset;
+        }
+      }
+    }
+
+    return -1;
+  }
+
+  private void ExpandEntryList(ref Entry entry, int entryIndex)
+  {
+    ExpandValueList:
+
+    // values list is full, must increase increase it's size
+    var newCapacity = entry.Capacity * 2;
+    Debug.Assert(newCapacity > 0);
+
+    var endOffset = entry.StartIndex + entry.Capacity;
+    if (endOffset == _valuesFreeStartIndex
+        && entry.StartIndex + newCapacity <= _values.Length)
+    {
+      // value list is the last list before free space
+      // and we can increase it's capacity w/o moving the data
+
+      _valuesCapacityUsed += newCapacity - entry.Capacity;
+      _valuesFreeStartIndex += newCapacity - entry.Capacity;
+      entry.Capacity = newCapacity;
+      return;
+    }
+
+    // check for gaps right after the current value list
+    ref var gap = ref TryFindGapWithStartOffset(endOffset);
+
+    if (gap.Capacity > 0)
+    {
+      if (entry.Capacity + gap.Capacity <= newCapacity)
+      {
+        entry.Capacity += gap.Capacity;
+        gap = default; // free gap
+        _valuesCapacityUsed += gap.Capacity;
+      }
+      else // make gap smaller
+      {
+        var delta = newCapacity - entry.Capacity;
+        gap.Capacity -= delta;
+        gap.StartOffset += delta;
+        entry.Capacity = newCapacity;
+        _valuesCapacityUsed += delta;
+      }
+
+      return;
+    }
+
+    gap = ref TryFindGapWithCapacity(newCapacity);
+
+    if (gap.Capacity > 0)
+    {
+      // value list can be fitted in the gap of free space
+
+      var gapStartOffset = gap.StartOffset;
+      Array.Copy(_values, entry.StartIndex, _values, gapStartOffset, entry.Count);
+
+      // update gap size
+      gap.StartOffset += newCapacity;
+      gap.Capacity -= newCapacity;
+
+      if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+      {
+        Array.Clear(_values, entry.StartIndex, entry.Count);
+      }
+
+      StoreGap(entry.StartIndex, entry.Capacity);
+
+      entry.StartIndex = gapStartOffset;
+      _valuesCapacityUsed += newCapacity - entry.Capacity;
+      entry.Capacity = newCapacity;
+      return;
+    }
+
+    if (_valuesFreeStartIndex + newCapacity < _values.Length)
+    {
+      // value list can be relocated in the tail free space and expanded
+      Array.Copy(_values, entry.StartIndex, _values, _valuesFreeStartIndex, entry.Count);
+
+      if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+      {
+        Array.Clear(_values, entry.StartIndex, entry.Count);
+      }
+
+      StoreGap(entry.StartIndex, entry.Capacity);
+
+      entry.StartIndex = _valuesFreeStartIndex;
+      _valuesCapacityUsed += newCapacity - entry.Capacity;
+      entry.Capacity = newCapacity;
+      _valuesFreeStartIndex += newCapacity;
+    }
+    else
+    {
+      // not enough space to put the resized value list
+      ExpandValuesListOrCompact(entryIndex, extraCapacity: 1);
+      goto ExpandValueList;
+    }
+  }
+
+  // private ref Gap TryFindAny()
+  // {
+  //   var gaps = _gaps;
+  //   if (gaps != null)
+  //   {
+  //     for (var index = 0; index < gaps.Length; index++)
+  //     {
+  //       ref var gap = ref gaps[index];
+  //
+  //       if (gap.Capacity > 0)
+  //         return ref gap;
+  //
+  //       break;
+  //     }
+  //   }
+  //
+  //   return ref s_emptyGap;
+  // }
+
+  private ref Gap TryFindGapWithStartOffset(int endOffset)
+  {
+    Debug.Assert(endOffset != 0);
+
+    var gaps = _gaps;
+    if (gaps != null)
+    {
+      for (var index = 0; index < gaps.Length; index++)
+      {
+        ref var gap = ref gaps[index];
+        if (gap.StartOffset == endOffset)
+          return ref gap;
+      }
+    }
+
+    return ref s_emptyGap;
+  }
+
+  private ref Gap TryFindGapWithCapacity(int newCapacity)
+  {
+    var gaps = _gaps;
+    if (gaps != null)
+    {
+      var minIndex = -1;
+      var minCapacity = 0;
+
+      for (var index = 0; index < gaps.Length; index++)
+      {
+        var capacity = gaps[index].Capacity;
+        if (capacity >= newCapacity && (minIndex < 0 || capacity < minCapacity))
+        {
+          minCapacity = capacity;
+          minIndex = index;
+        }
+      }
+
+      if (minIndex >= 0) return ref gaps[minIndex];
+    }
+
+    return ref s_emptyGap;
+  }
+
+  private void StoreGap(int startOffset, int capacity)
+  {
+    Debug.Assert(capacity > 0);
+
+    var gaps = _gaps;
+    if (gaps == null)
+    {
+      _gaps = gaps = new Gap[10];
+      gaps[0] = new Gap(startOffset, capacity);
+      return;
+    }
+
+    var endOffset = startOffset + capacity;
+    var emptyIndex = -1;
+
+    for (var index = 0; index < gaps.Length; index++)
+    {
+      ref var gap = ref gaps[index];
+
+      if (gap.StartOffset == endOffset)
+      {
+        gap.StartOffset -= capacity;
+        gap.Capacity += capacity;
+        return;
+      }
+
+      if (gap.StartOffset + gap.Capacity == startOffset)
+      {
+        gap.Capacity += capacity;
+        return;
+      }
+
+      if (gap.Capacity == 0)
+      {
+        emptyIndex = index;
+      }
+    }
+
+    if (emptyIndex >= 0)
+    {
+      gaps[emptyIndex] = new Gap(startOffset, capacity);
+      return;
+    }
+
+    // no free slots, check for gaps with smaller capacity to replace
+
+    for (var index = 0; index < gaps.Length; index++)
+    {
+      ref var gap = ref gaps[index];
+
+      if (gap.Capacity < capacity)
+      {
+        gap = new Gap(startOffset, capacity);
+        return;
+      }
+    }
   }
 
   public bool Remove(TKey key)
@@ -295,6 +477,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
           _valuesCapacityUsed -= entry.Capacity;
 
+          StoreGap(entry.StartIndex, entry.Capacity);
+
           // important!
           entry.Count = 0;
           entry.Capacity = 0;
@@ -349,6 +533,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
       _valuesStoredCount = 0;
       _valuesCapacityUsed = 0;
       _valuesFreeStartIndex = 0;
+
+      var gaps = _gaps;
+      if (gaps != null) Array.Clear(gaps);
     }
   }
 
@@ -574,13 +761,14 @@ public class MultiValueDictionarySlim<TKey, TValue>
       return;
     }
 
+    /*
     if (_valuesCapacityUsed + extraCapacity < _values.Length * 0.7)
     {
       // todo: this is not optimized, must be done in-place
       ResizeValuesAndCompactWhileCopying(entryIndex, _values.Length, extraCapacity);
       Console.WriteLine("COMPACT");
     }
-    else
+    else*/
     {
       var newCapacity = Math.Max(
         Math.Max(_valuesCapacityUsed + extraCapacity, _values.Length * 2),
@@ -697,8 +885,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
     _values = newArray;
     _valuesFreeStartIndex = newArrayIndex;
     _valuesCapacityUsed = newArrayIndex;
-    _valuesGapCapacity = 0;
-    _valuesGapStartOffset = 0;
+
+    var gaps = _gaps;
+    if (gaps != null) Array.Clear(gaps);
 
     Debug.Assert(_valuesStoredCount <= _valuesCapacityUsed);
     Debug.Assert(_valuesCapacityUsed <= _values.Length);
