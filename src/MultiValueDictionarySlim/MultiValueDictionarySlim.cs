@@ -70,6 +70,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     // can be 0, can be the same as StartIndex
     // index at EndIndex is a Count or collection
+    // can be -1 for allocated empty entries
     public int EndIndex;
 
     public override string ToString()
@@ -141,9 +142,11 @@ public class MultiValueDictionarySlim<TKey, TValue>
         Debug.Assert(valueIndex < _values.Length);
         Debug.Assert(valueIndex < _indexes.Length);
       }
+
+      _valuesCount++;
     }
 
-    if (entry.StartIndex == -1) // new key added
+    if (entry.EndIndex == -1) // new key added
     {
       entry.StartIndex = valueIndex;
       entry.EndIndex = valueIndex;
@@ -154,6 +157,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     else // key has values associated
     {
       var oldCount = _indexes[entry.EndIndex];
+      _indexes[entry.EndIndex] = valueIndex;
 
       entry.EndIndex = valueIndex; // append new item
       _values[valueIndex] = value;
@@ -227,7 +231,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
           _valueFreeList = entry.StartIndex;
 
           // todo: do we need this?
-          entry.StartIndex = -1;
+          //entry.StartIndex = -1;
           entry.EndIndex = -1;
 
           _keyFreeList = i;
@@ -438,7 +442,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     entry.HashCode = hashCode;
     entry.Next = bucket - 1; // Value in _buckets is 1-based
     entry.Key = key;
-    entry.StartIndex = -1;
+    entry.EndIndex = -1;
     bucket = index + 1; // Value in _buckets is 1-based
 
     // users of this method must do this
@@ -520,25 +524,25 @@ public class MultiValueDictionarySlim<TKey, TValue>
       while ((uint) keyIndex < keyCount)
       {
         ref var entry = ref entries[keyIndex++];
+        if (entry.Next < -1) continue;
 
-        if (entry.Next >= -1)
+        var newStartIndex = newValuesIndex;
+        var endIndex = entry.EndIndex;
+        if (endIndex < 0) continue; // allocated but empty entry
+
+        for (var index = entry.StartIndex; index != endIndex; index = _indexes[index])
         {
-          var newStartIndex = newValuesIndex;
-          var endIndex = entry.EndIndex;
-          for (var index = entry.StartIndex; index != endIndex; index = _indexes[index])
-          {
-            newValues[newValuesIndex] = _values[index];
-            newIndexes[newValuesIndex] = newValuesIndex + 1;
-            newValuesIndex++;
-          }
-
-          newValues[newValuesIndex] = _values[endIndex];
-          newIndexes[newValuesIndex] = _indexes[endIndex]; // copy count
-
-          entry.StartIndex = newStartIndex;
-          entry.EndIndex = newValuesIndex;
+          newValues[newValuesIndex] = _values[index];
+          newIndexes[newValuesIndex] = newValuesIndex + 1;
           newValuesIndex++;
         }
+
+        newValues[newValuesIndex] = _values[endIndex];
+        newIndexes[newValuesIndex] = _indexes[endIndex]; // copy count
+
+        entry.StartIndex = newStartIndex;
+        entry.EndIndex = newValuesIndex;
+        newValuesIndex++;
       }
 
       _values = newValues;

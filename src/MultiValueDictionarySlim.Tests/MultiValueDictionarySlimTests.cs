@@ -7,6 +7,53 @@ public class MultiValueDictionarySlimTests
   private readonly Random _random = new(43431); // 43435
 
   [Test]
+  [TestCase(false)]
+  [TestCase(true)]
+  public void SimpleOperations(bool useComparer)
+  {
+    var dictionary = useComparer
+      ? new MultiValueDictionarySlim<int, string>(CustomIntComparer.Instance)
+      : new MultiValueDictionarySlim<int, string>();
+
+    dictionary.Add(1, "11");
+    dictionary.Add(1, "12");
+    dictionary.Add(2, "21");
+    dictionary.Add(1, "13");
+    dictionary.Add(3, "31");
+    dictionary.Add(3, "32");
+    dictionary.Add(2, "22");
+
+    Assert.AreEqual(3, dictionary.Count);
+    Assert.AreEqual(7, dictionary.ValuesCount);
+    Assert.AreEqual(3, dictionary.KeysCapacity);
+    Assert.AreEqual(8, dictionary.ValuesCapacity);
+
+    Assert.AreEqual(0, dictionary[0].Count);
+    Assert.AreEqual(0, dictionary[-2].Count);
+    Assert.AreEqual(3, dictionary[1].Count);
+    Assert.AreEqual(2, dictionary[2].Count);
+    Assert.AreEqual(2, dictionary[3].Count);
+
+    Assert.IsFalse(dictionary.Remove(0));
+    Assert.IsTrue(dictionary.Remove(2));
+
+    Assert.AreEqual(2, dictionary.Count);
+    Assert.AreEqual(5, dictionary.ValuesCount);
+    Assert.AreEqual(3, dictionary.KeysCapacity);
+    Assert.AreEqual(8, dictionary.ValuesCapacity);
+
+    // freelist usage
+    dictionary.Add(7, "71");
+    dictionary.Add(7, "72");
+    dictionary.Add(7, "73");
+
+    Assert.AreEqual(3, dictionary.Count);
+    Assert.AreEqual(8, dictionary.ValuesCount);
+    Assert.AreEqual(3, dictionary.KeysCapacity);
+    Assert.AreEqual(8, dictionary.ValuesCapacity);
+  }
+
+  [Test]
   [Repeat(1000)]
   public void BasicOperations()
   {
@@ -195,7 +242,7 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test]
-  [Repeat(100)]
+  [Repeat(1000)]
   public void Consistency()
   {
     var dictionarySlim = new MultiValueDictionarySlim<int, int>();
