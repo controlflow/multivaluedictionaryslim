@@ -10,24 +10,22 @@ public class MultiValueDictionarySlimTests
   [Repeat(1000)]
   public void BasicOperations()
   {
-    var dictionary = new Dictionary<int, List<string>>();
-    // var dictionarySlim = _random.Next(0, 20) switch
-    // {
-    //   >= 0 and < 10 => new MultiValueDictionarySlim<int, string>(),
-    //   >= 10 and < 16 => new MultiValueDictionarySlim<int, string>(CustomIntComparer.Instance),
-    //   17 => new MultiValueDictionarySlim<int, string>(
-    //     keyCapacity: 0, valueCapacity: _random.Next(0, 100)),
-    //   18 => new MultiValueDictionarySlim<int, string>(
-    //     keyCapacity: _random.Next(0, 100), valueCapacity: 0),
-    //   19 => new MultiValueDictionarySlim<int, string>(
-    //     keyCapacity: _random.Next(0, 100), valueCapacity: _random.Next(0, 100)),
-    //   _ => new MultiValueDictionarySlim<int, string>(
-    //     keyCapacity: _random.Next(0, 100), valueCapacity: _random.Next(0, 100), CustomIntComparer.Instance)
-    // };
-
-    //Console.WriteLine("=========================");
-
-    var dictionarySlim = new MultiValueDictionarySlim<int, string>();
+    var dictionary = new MultiValueDictionaryNaive<int, string>();
+    var dictionarySlim = _random.Next(0, 20) switch
+    {
+      >= 0 and < 10
+        => new MultiValueDictionarySlim<int, string>(),
+      >= 10 and < 16
+        => new MultiValueDictionarySlim<int, string>(CustomIntComparer.Instance),
+      17
+        => new MultiValueDictionarySlim<int, string>(keyCapacity: 0, valueCapacity: _random.Next(0, 100)),
+      18
+        => new MultiValueDictionarySlim<int, string>(keyCapacity: _random.Next(0, 100), valueCapacity: 0),
+      19
+        => new MultiValueDictionarySlim<int, string>(keyCapacity: _random.Next(0, 100), valueCapacity: _random.Next(0, 100)),
+      _
+        => new MultiValueDictionarySlim<int, string>(keyCapacity: _random.Next(0, 100), valueCapacity: _random.Next(0, 100), CustomIntComparer.Instance)
+    };
 
     var keysPerCollection = _random.Next(1, 20);
 
@@ -45,21 +43,15 @@ public class MultiValueDictionarySlimTests
           var valuesCount = dictionarySlim.ValuesCount;
 
           dictionarySlim.Add(key, value);
-
-          if (!dictionary.TryGetValue(key, out var list))
-            dictionary[key] = list = new List<string>();
-          list.Add(value);
+          dictionary.Add(key, value);
 
           Assert.AreEqual(dictionary.Count, dictionarySlim.Count);
+          Assert.AreEqual(dictionary.ValuesCount, dictionarySlim.ValuesCount);
           Assert.AreEqual(valuesCount + 1, dictionarySlim.ValuesCount);
-
-          //Console.WriteLine("add");
-          //Console.WriteLine(dictionarySlim.ValueListMapView);
           break;
         }
 
-        case 18 when false:
-        //case 18 when dictionary.Count > 0:
+        case 18 when dictionary.Count > 0:
         {
           var index = _random.Next(0, dictionary.Count);
           var keyToRemove = dictionary.Keys.ElementAt(index);
@@ -75,13 +67,10 @@ public class MultiValueDictionarySlimTests
           Assert.AreEqual(r1, r2);
           Assert.AreEqual(dictionary.Count, dictionarySlim.Count);
           Assert.AreEqual(valuesCount - itemsCount, dictionarySlim.ValuesCount);
-
-          Console.WriteLine("remove");
-          Console.WriteLine(dictionarySlim.ValueListMapView);
           break;
         }
 
-        case 19 when false:
+        case 19:
         {
           dictionary.Clear();
           dictionarySlim.Clear();
@@ -93,6 +82,11 @@ public class MultiValueDictionarySlimTests
         }
 
         case 20:
+        {
+          break;
+        }
+
+        case 21:
         {
           var count = dictionary.Count;
 
@@ -108,19 +102,16 @@ public class MultiValueDictionarySlimTests
       }
     }
 
-
-    //dictionarySlim.TrimExcess();
-
     if (dictionarySlim.ValuesCapacity > 0)
     {
       _fillRatios.Add(dictionarySlim.ValuesCount / (double) dictionarySlim.ValuesCapacity);
-      _usedCapacities.Add(dictionarySlim.ValuesUsedCapacity / (double) dictionarySlim.ValuesCapacity);
+      //_usedCapacities.Add(dictionarySlim.ValuesUsedCapacity / (double) dictionarySlim.ValuesCapacity);
       _totalCapacity += dictionarySlim.ValuesCapacity;
     }
 
     //dictionarySlim.TrimExcess();
 
-    Console.WriteLine(dictionarySlim.ValueListMapView);
+    //Console.WriteLine(dictionarySlim.ValueListMapView);
 
     //throw null;
 
@@ -160,7 +151,7 @@ public class MultiValueDictionarySlimTests
       dictionarySlim.Add(key, RandomString());
     }
 
-    Assert.AreEqual(dictionarySlim.ValuesUsedCapacity, dictionarySlim.ValuesCount);
+    //Assert.AreEqual(dictionarySlim.ValuesUsedCapacity, dictionarySlim.ValuesCount);
   }
 
   [Test, Repeat(1000)]
@@ -200,7 +191,7 @@ public class MultiValueDictionarySlimTests
       }
     }
 
-    Assert.IsTrue(!dictionarySlim.ValuesListHasGaps);
+    //Assert.IsTrue(!dictionarySlim.ValuesListHasGaps);
   }
 
   [Test]
@@ -239,8 +230,6 @@ public class MultiValueDictionarySlimTests
     dictionarySlim.Add("aaa", 2);
     dictionarySlim.Add("bbb", 5);
     dictionarySlim.Add("bbb", 6);
-
-    ;
   }
 
   private sealed class DumbEqualityComparer<T> : IEqualityComparer<T>
@@ -273,7 +262,8 @@ public class MultiValueDictionarySlimTests
   }
 
   private static void AssertEqual<TKey, TValue>(
-    MultiValueDictionarySlim<TKey, TValue> dictionarySlim, Dictionary<TKey, List<TValue>> dictionary)
+    MultiValueDictionarySlim<TKey, TValue> dictionarySlim,
+    MultiValueDictionaryNaive<TKey, TValue> dictionary)
     where TKey : notnull
   {
     Assert.AreEqual(dictionary.Count, dictionarySlim.Count);

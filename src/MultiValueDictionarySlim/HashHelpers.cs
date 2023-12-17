@@ -6,12 +6,12 @@ namespace System.Collections.Generic
   {
     // This is the maximum prime smaller than Array.MaxLength.
     public const int MaxPrimeArrayLength = 0x7FFFFFC3;
-    
+
     // Returns size of hashtable to grow to.
     public static int ExpandPrime(int oldSize)
     {
       int newSize = 2 * oldSize;
- 
+
       // Allow the hashtables to grow to maximum possible size (~2G elements) before encountering capacity overflow.
       // Note that this check works even when _items.Length overflowed thanks to the (uint) cast
       if ((uint)newSize > MaxPrimeArrayLength && MaxPrimeArrayLength > oldSize)
@@ -19,12 +19,12 @@ namespace System.Collections.Generic
         Debug.Assert(MaxPrimeArrayLength == GetPrime(MaxPrimeArrayLength), "Invalid MaxPrimeArrayLength");
         return MaxPrimeArrayLength;
       }
- 
+
       return GetPrime(newSize);
     }
 
     public static ulong HashCollisionThreshold => 0;
-    
+
     public static bool IsPrime(int candidate)
     {
       if ((candidate & 1) != 0)
@@ -41,7 +41,7 @@ namespace System.Collections.Generic
 
       return candidate == 2;
     }
-    
+
     public const int HashPrime = 101;
 
     private static readonly int[] s_primes =
@@ -57,13 +57,13 @@ namespace System.Collections.Generic
     {
       if (min < 0)
         throw new ArgumentOutOfRangeException(nameof(min));
- 
+
       foreach (var prime in s_primes)
       {
         if (prime >= min)
           return prime;
       }
- 
+
       // Outside of our predefined table. Compute the hard way.
       for (var i = (min | 1); i < int.MaxValue; i += 2)
       {

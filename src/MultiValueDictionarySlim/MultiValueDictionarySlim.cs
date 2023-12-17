@@ -14,6 +14,15 @@ namespace System.Collections.Generic;
 // todo: keys collection
 // todo: all values collection
 // todo: do we need separate capacity for values? can it be lower?
+// todo: count + start index = int
+// todo: one item price must be low
+// todo: sequential addition price must be low
+// todo: must be poolable, big sequential chunks
+// todo: ushort start + ushort count = can't address much items
+// todo: [k1, 111], [k2, 111], [k1, 222], [k2, 222] problem
+// todo: [1][2][1,1,1,1][3][2,2,2] - 11223
+// todo: 1 int per item?
+// todo: store count somewhere?
 
 [DebuggerTypeProxy(typeof(MultiValueDictionarySlimDebugView<,>))]
 [DebuggerDisplay("Count = {Count}")]
@@ -22,43 +31,26 @@ public class MultiValueDictionarySlim<TKey, TValue>
 {
   private int[]? _buckets;
   private Entry[]? _entries;
+  private TValue[] _values;
+  private int[] _indexes;
 
-  private int _count;
-  private int _freeList;
-  private int _freeCount;
+  private int _keyCount;
+  private int _valuesCount;
   private int _version;
 
-  private IEqualityComparer<TKey>? _comparer;
+  private readonly IEqualityComparer<TKey>? _comparer;
 
   private const int StartOfFreeList = -3;
 
-  // [ [1, 2, 3, _], [4], _, _, [5, 6], _, _]
-  private TValue[] _values;
-  private int _valuesFreeStartIndex;
-  private int _valuesCapacityUsed;
-  private int _valuesStoredCount;
-
-  // sorted list of non-contacting gaps, ordered by increasing capacity
-  private Gap[]? _gaps;
-  private static Gap s_emptyGap;
-
-  private struct Gap
-  {
-    public int StartOffset;
-    public int Capacity;
-
-    public Gap(int startOffset, int capacity)
-    {
-      StartOffset = startOffset;
-      Capacity = capacity;
-    }
-
-    public override string ToString() => $"(start: {StartOffset}, capacity: {Capacity})";
-  }
+  private int _keyFreeList;
+  private int _keyFreeCount;
+  private int _valueFreeList;
+  private int _valueFreeCount;
 
   private const int DefaultValuesListSize = 4;
 
   private static readonly TValue[] s_emptyValues = new TValue[0];
+  private static readonly int[] s_emptyIndexes = new int[0];
 
   private struct Entry
   {
@@ -73,27 +65,27 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public TKey Key;
 
-    public int StartIndex; // can be 0
-    public int Capacity; // only 0 for newly-created and not initialized entries
-    public int Count; // only 0 for newly-created and not-initialized entries
+    // can be 0
+    public int StartIndex;
+
+    // can be 0, can be the same as StartIndex
+    // index at EndIndex is a Count or collection
+    public int EndIndex;
 
     public override string ToString()
     {
-      if (StartIndex == 0 && Capacity == 0)
-        return "<empty>";
-
-      return $"Entry [key={Key}, used={Count} of {Capacity}, range={StartIndex}-{StartIndex + Capacity}]";
+      return $"Entry [key={Key}, start={StartIndex}, end={EndIndex}]";
     }
   }
 
   public MultiValueDictionarySlim()
-    : this(keyCapacity: 0, 0, null) { }
+    : this(keyCapacity: 0, 0, comparer: null) { }
 
   public MultiValueDictionarySlim(int keyCapacity, int valueCapacity)
-    : this(keyCapacity: keyCapacity, valueCapacity, null) { }
+    : this(keyCapacity: keyCapacity, valueCapacity, comparer: null) { }
 
   public MultiValueDictionarySlim(IEqualityComparer<TKey>? comparer)
-    : this(keyCapacity: 0, 0, comparer) { }
+    : this(keyCapacity: 0, valueCapacity: 0, comparer) { }
 
   public MultiValueDictionarySlim(int keyCapacity, int valueCapacity, IEqualityComparer<TKey>? comparer)
   {
@@ -106,20 +98,17 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
 
     _values = valueCapacity > 0 ? new TValue[valueCapacity] : s_emptyValues;
+    _indexes = valueCapacity > 0 ? new int[valueCapacity] : s_emptyIndexes;
 
     // first check for null to avoid forcing default comparer instantiation unnecessarily
-    if (comparer != null && comparer != EqualityComparer<TKey>.Default)
+    if (comparer != null && !ReferenceEquals(comparer, EqualityComparer<TKey>.Default))
     {
       _comparer = comparer;
     }
   }
 
-  // TODO: constructors, remove field initializers?
-
-  public int Count => _count - _freeCount;
-  public int ValuesCount => _valuesStoredCount;
-  public int ValuesUsedCapacity => _valuesCapacityUsed;
-  public bool ValuesListHasGaps => _valuesCapacityUsed != _valuesFreeStartIndex;
+  public int Count => _keyCount - _keyFreeCount;
+  public int ValuesCount => _valuesCount - _valueFreeCount;
 
   public IEqualityComparer<TKey> Comparer => _comparer ?? EqualityComparer<TKey>.Default;
 
@@ -128,301 +117,55 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   public void Add(TKey key, TValue value)
   {
-    var entryIndex = GetOrCreateEntry(key);
+    var entryIndex = GetOrCreateKeyEntry(key);
 
     ref var entry = ref _entries![entryIndex];
-    if (entry.Capacity == 0)
+
+    // allocate a place for value to store
+    int valueIndex;
+    if (_valueFreeCount > 0) // try freelist first
     {
-      // entry was not allocated in the _values array
-      // this is the most likely case - fresh key w/o any values added
-
-      var targetIndex = _valuesFreeStartIndex;
-      if (targetIndex == _values.Length) // value list is full
-      {
-        var gapIndex = TryAllocateInGap();
-        if (gapIndex >= 0)
-        {
-          targetIndex = gapIndex;
-          _valuesFreeStartIndex--; // hack to share the code below
-        }
-        else
-        {
-          ExpandValuesListOrCompact(entryIndex);
-          Debug.Assert(_valuesFreeStartIndex < _values.Length);
-        }
-      }
-
-      // allocate single item list first
-      // we expect { 1 key - 1 value } to be the common scenario
-      entry.StartIndex = targetIndex;
-      entry.Capacity = 1;
-      _values[targetIndex] = value;
-      entry.Count = 1;
-      _valuesFreeStartIndex++;
-      _valuesCapacityUsed++;
-    }
-    else // entry has values associated
-    {
-      if (entry.Count >= entry.Capacity)
-      {
-        ExpandEntryList(ref entry, entryIndex);
-        Debug.Assert(entry.Count < entry.Capacity);
-      }
-
-      // there is a free space inside a list, simply put the value and increase the entry count
-      _values[entry.StartIndex + entry.Count] = value;
-      entry.Count++;
-    }
-
-    _valuesStoredCount++;
-    _version++;
-
-    if (_valuesStoredCount > _valuesCapacityUsed)
-    {
-      GC.KeepAlive(this);
-    }
-
-    Debug.Assert(_valuesStoredCount <= _valuesCapacityUsed);
-    Debug.Assert(_valuesCapacityUsed <= _values.Length);
-  }
-
-  private int TryAllocateInGap()
-  {
-    var gaps = _gaps;
-    if (gaps != null)
-    {
-      for (var index = 0; index < gaps.Length; index++)
-      {
-        ref var gap = ref gaps[index];
-        if (gap.Capacity > 0)
-        {
-          var startOffset = gap.StartOffset;
-          gap.StartOffset++;
-          gap.Capacity--;
-          return startOffset;
-        }
-      }
-    }
-
-    return -1;
-  }
-
-  private void ExpandEntryList(ref Entry entry, int entryIndex)
-  {
-    ExpandValueList:
-
-    // values list is full, must increase increase it's size
-    var newCapacity = entry.Capacity * 2;
-    Debug.Assert(newCapacity > 0);
-
-    var endOffset = entry.StartIndex + entry.Capacity;
-    if (endOffset == _valuesFreeStartIndex
-        && entry.StartIndex + newCapacity <= _values.Length)
-    {
-      // value list is the last list before free space
-      // and we can increase it's capacity w/o moving the data
-
-      _valuesCapacityUsed += newCapacity - entry.Capacity;
-      _valuesFreeStartIndex += newCapacity - entry.Capacity;
-      entry.Capacity = newCapacity;
-      return;
-    }
-
-    // check for gaps right after the current value list
-    ref var gap = ref TryFindGapWithStartOffset(endOffset);
-
-    if (gap.Capacity > 0)
-    {
-      if (entry.Capacity + gap.Capacity <= newCapacity)
-      {
-        entry.Capacity += gap.Capacity;
-        gap = default; // free gap
-        _valuesCapacityUsed += gap.Capacity;
-      }
-      else // make gap smaller
-      {
-        var delta = newCapacity - entry.Capacity;
-        gap.Capacity -= delta;
-        gap.StartOffset += delta;
-        entry.Capacity = newCapacity;
-        _valuesCapacityUsed += delta;
-      }
-
-      return;
-    }
-
-    gap = ref TryFindGapWithCapacity(newCapacity);
-
-    if (gap.Capacity > 0)
-    {
-      // value list can be fitted in the gap of free space
-
-      var gapStartOffset = gap.StartOffset;
-      Array.Copy(_values, entry.StartIndex, _values, gapStartOffset, entry.Count);
-
-      // update gap size
-      gap.StartOffset += newCapacity;
-      gap.Capacity -= newCapacity;
-
-      if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
-      {
-        Array.Clear(_values, entry.StartIndex, entry.Count);
-      }
-
-      StoreGap(entry.StartIndex, entry.Capacity);
-
-      entry.StartIndex = gapStartOffset;
-      _valuesCapacityUsed += newCapacity - entry.Capacity;
-      entry.Capacity = newCapacity;
-      return;
-    }
-
-    if (_valuesFreeStartIndex + newCapacity < _values.Length)
-    {
-      // value list can be relocated in the tail free space and expanded
-      Array.Copy(_values, entry.StartIndex, _values, _valuesFreeStartIndex, entry.Count);
-
-      if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
-      {
-        Array.Clear(_values, entry.StartIndex, entry.Count);
-      }
-
-      StoreGap(entry.StartIndex, entry.Capacity);
-
-      entry.StartIndex = _valuesFreeStartIndex;
-      _valuesCapacityUsed += newCapacity - entry.Capacity;
-      entry.Capacity = newCapacity;
-      _valuesFreeStartIndex += newCapacity;
+      valueIndex = _valueFreeList;
+      Debug.Assert(valueIndex < _values.Length);
+      _valueFreeList = _indexes[valueIndex]; // next freelist index
+      _valueFreeCount--;
     }
     else
     {
-      // not enough space to put the resized value list
-      ExpandValuesListOrCompact(entryIndex, extraCapacity: 1);
-      goto ExpandValueList;
-    }
-  }
+      valueIndex = _valuesCount;
 
-  // private ref Gap TryFindAny()
-  // {
-  //   var gaps = _gaps;
-  //   if (gaps != null)
-  //   {
-  //     for (var index = 0; index < gaps.Length; index++)
-  //     {
-  //       ref var gap = ref gaps[index];
-  //
-  //       if (gap.Capacity > 0)
-  //         return ref gap;
-  //
-  //       break;
-  //     }
-  //   }
-  //
-  //   return ref s_emptyGap;
-  // }
-
-  private ref Gap TryFindGapWithStartOffset(int endOffset)
-  {
-    Debug.Assert(endOffset != 0);
-
-    var gaps = _gaps;
-    if (gaps != null)
-    {
-      for (var index = 0; index < gaps.Length; index++)
+      if (valueIndex == _values.Length) // value list is full
       {
-        ref var gap = ref gaps[index];
-        if (gap.StartOffset == endOffset)
-          return ref gap;
+        ResizeValues();
+
+        Debug.Assert(valueIndex < _values.Length);
+        Debug.Assert(valueIndex < _indexes.Length);
       }
     }
 
-    return ref s_emptyGap;
-  }
-
-  private ref Gap TryFindGapWithCapacity(int newCapacity)
-  {
-    var gaps = _gaps;
-    if (gaps != null)
+    if (entry.StartIndex == -1) // new key added
     {
-      var minIndex = -1;
-      var minCapacity = 0;
+      entry.StartIndex = valueIndex;
+      entry.EndIndex = valueIndex;
 
-      for (var index = 0; index < gaps.Length; index++)
-      {
-        var capacity = gaps[index].Capacity;
-        if (capacity >= newCapacity && (minIndex < 0 || capacity < minCapacity))
-        {
-          minCapacity = capacity;
-          minIndex = index;
-        }
-      }
+      _values[valueIndex] = value;
+      _indexes[valueIndex] = 1; // store count
+    }
+    else // key has values associated
+    {
+      var oldCount = _indexes[entry.EndIndex];
 
-      if (minIndex >= 0) return ref gaps[minIndex];
+      entry.EndIndex = valueIndex; // append new item
+      _values[valueIndex] = value;
+      _indexes[valueIndex] = oldCount + 1; // new count
     }
 
-    return ref s_emptyGap;
-  }
-
-  private void StoreGap(int startOffset, int capacity)
-  {
-    Debug.Assert(capacity > 0);
-
-    var gaps = _gaps;
-    if (gaps == null)
-    {
-      _gaps = gaps = new Gap[10];
-      gaps[0] = new Gap(startOffset, capacity);
-      return;
-    }
-
-    var endOffset = startOffset + capacity;
-    var emptyIndex = -1;
-
-    for (var index = 0; index < gaps.Length; index++)
-    {
-      ref var gap = ref gaps[index];
-
-      if (gap.StartOffset == endOffset)
-      {
-        gap.StartOffset -= capacity;
-        gap.Capacity += capacity;
-        return;
-      }
-
-      if (gap.StartOffset + gap.Capacity == startOffset)
-      {
-        gap.Capacity += capacity;
-        return;
-      }
-
-      if (gap.Capacity == 0)
-      {
-        emptyIndex = index;
-      }
-    }
-
-    if (emptyIndex >= 0)
-    {
-      gaps[emptyIndex] = new Gap(startOffset, capacity);
-      return;
-    }
-
-    // no free slots, check for gaps with smaller capacity to replace
-
-    for (var index = 0; index < gaps.Length; index++)
-    {
-      ref var gap = ref gaps[index];
-
-      if (gap.Capacity < capacity)
-      {
-        gap = new Gap(startOffset, capacity);
-        return;
-      }
-    }
+    _version++;
   }
 
   public bool Remove(TKey key)
   {
+    // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
     if (key == null)
     {
       ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
@@ -456,36 +199,39 @@ public class MultiValueDictionarySlim<TKey, TValue>
           }
 
           Debug.Assert(
-            (StartOfFreeList - _freeList) < 0,
+            StartOfFreeList - _keyFreeList < 0,
             "shouldn't underflow because max hashtable length is MaxPrimeArrayLength = 0x7FEFFFFD(2146435069) _freelist underflow threshold 2147483646");
-          entry.Next = StartOfFreeList - _freeList;
+          entry.Next = StartOfFreeList - _keyFreeList;
 
           if (RuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
           {
             entry.Key = default!;
           }
 
-          if (entry.Count > 0)
+          if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
           {
-            if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+            // O(n) removal, unfortunately
+            var endIndex = entry.EndIndex;
+            for (var index = entry.StartIndex; index != endIndex; index = _indexes[index])
             {
-              Array.Clear(_values, entry.StartIndex, entry.Count);
+              _values[index] = default!;
             }
 
-            _valuesStoredCount -= entry.Count;
+            _values[endIndex] = default!;
           }
 
-          _valuesCapacityUsed -= entry.Capacity;
+          // append linked list of values to freelist
+          var count = _indexes[entry.EndIndex];
+          _valueFreeCount += count;
+          _indexes[entry.EndIndex] = _valueFreeList;
+          _valueFreeList = entry.StartIndex;
 
-          StoreGap(entry.StartIndex, entry.Capacity);
+          // todo: do we need this?
+          entry.StartIndex = -1;
+          entry.EndIndex = -1;
 
-          // important!
-          entry.Count = 0;
-          entry.Capacity = 0;
-          entry.StartIndex = 0;
-
-          _freeList = i;
-          _freeCount++;
+          _keyFreeList = i;
+          _keyFreeCount++;
           return true;
         }
 
@@ -512,52 +258,48 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   public void Clear()
   {
-    var count = _count;
-    if (count > 0)
+    var count = _keyCount;
+    if (count <= 0) return;
+
+    Debug.Assert(_buckets != null, "_buckets should be non-null");
+    Debug.Assert(_entries != null, "_entries should be non-null");
+
+    Array.Clear(_buckets, 0, _buckets.Length);
+
+    _keyCount = 0;
+    _keyFreeList = -1;
+    _keyFreeCount = 0;
+
+    _valuesCount = 0;
+    _valueFreeList = -1;
+    _valueFreeCount = 0;
+
+    Array.Clear(_entries, 0, count);
+
+    if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
     {
-      Debug.Assert(_buckets != null, "_buckets should be non-null");
-      Debug.Assert(_entries != null, "_entries should be non-null");
-
-      Array.Clear(_buckets, 0, _buckets.Length);
-
-      _count = 0;
-      _freeList = -1;
-      _freeCount = 0;
-      Array.Clear(_entries, 0, count);
-
-      if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
-      {
-        Array.Clear(_values, 0, _valuesFreeStartIndex);
-      }
-
-      _valuesStoredCount = 0;
-      _valuesCapacityUsed = 0;
-      _valuesFreeStartIndex = 0;
-
-      var gaps = _gaps;
-      if (gaps != null) Array.Clear(gaps);
+      Array.Clear(_values, 0, _valuesCount);
     }
   }
 
-  private int Initialize(int capacity)
+  private void Initialize(int capacity)
   {
     var size = HashHelpers.GetPrime(capacity);
     var buckets = new int[size];
     var entries = new Entry[size];
 
     // Assign member variables after both arrays allocated to guard against corruption from OOM if second fails
-    _freeList = -1;
+    _keyFreeList = -1;
 #if TARGET_64BIT
     _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)size);
 #endif
     _buckets = buckets;
     _entries = entries;
-
-    return size;
   }
 
-  private int GetOrCreateEntry(TKey key)
+  private int GetOrCreateKeyEntry(TKey key)
   {
+    // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
     if (key == null)
     {
       ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
@@ -565,7 +307,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     if (_buckets == null)
     {
-      Initialize(0);
+      Initialize(capacity: 0);
     }
 
     Debug.Assert(_buckets != null);
@@ -671,24 +413,24 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
 
     int index;
-    if (_freeCount > 0)
+    if (_keyFreeCount > 0)
     {
-      index = _freeList;
-      Debug.Assert((StartOfFreeList - entries[_freeList].Next) >= -1, "shouldn't overflow because `next` cannot underflow");
-      _freeList = StartOfFreeList - entries[_freeList].Next;
-      _freeCount--;
+      index = _keyFreeList;
+      Debug.Assert((StartOfFreeList - entries[_keyFreeList].Next) >= -1, "shouldn't overflow because `next` cannot underflow");
+      _keyFreeList = StartOfFreeList - entries[_keyFreeList].Next;
+      _keyFreeCount--;
     }
     else
     {
-      var count = _count;
+      var count = _keyCount;
       if (count == entries.Length)
       {
-        Resize();
+        ResizeKeys();
         bucket = ref GetBucket(hashCode);
       }
 
       index = count;
-      _count = count + 1;
+      _keyCount = count + 1;
       entries = _entries;
     }
 
@@ -696,9 +438,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
     entry.HashCode = hashCode;
     entry.Next = bucket - 1; // Value in _buckets is 1-based
     entry.Key = key;
+    entry.StartIndex = -1;
     bucket = index + 1; // Value in _buckets is 1-based
-
-    //entry.Capacity = ;
 
     // users of this method must do this
     // _version++;
@@ -717,16 +458,20 @@ public class MultiValueDictionarySlim<TKey, TValue>
 #endif
   }
 
-  private void Resize() => Resize(HashHelpers.ExpandPrime(_count));
+  private void ResizeKeys()
+  {
+    // todo: count?
+    ResizeKeys(HashHelpers.ExpandPrime(_keyCount));
+  }
 
-  private void Resize(int newSize)
+  private void ResizeKeys(int newSize)
   {
     Debug.Assert(_entries != null, "_entries should be non-null");
     Debug.Assert(newSize >= _entries.Length);
 
     var entries = new Entry[newSize];
 
-    var count = _count;
+    var count = _keyCount;
     Array.Copy(_entries, entries, count);
 
     // Assign member variables after both arrays allocated to guard against corruption from OOM if second fails
@@ -748,153 +493,67 @@ public class MultiValueDictionarySlim<TKey, TValue>
     _entries = entries;
   }
 
-  // todo:
-  // todo: when copying and compacting we should skip the "current" entry and put it last, so we can extend it last
-  private void ExpandValuesListOrCompact(int entryIndex, int extraCapacity = 1)
+  private void ResizeValues(int extraCapacity = 1)
   {
-    Debug.Assert(_valuesStoredCount <= _valuesCapacityUsed);
-    Debug.Assert(_valuesCapacityUsed <= _values.Length);
+    Debug.Assert(_valuesCount <= _values.Length);
 
     if (_values.Length == 0)
     {
-      _values = new TValue[Math.Max(extraCapacity, DefaultValuesListSize)];
-      return;
-    }
-
-    /*
-    if (_valuesCapacityUsed + extraCapacity < _values.Length * 0.7)
-    {
-      // todo: this is not optimized, must be done in-place
-      ResizeValuesAndCompactWhileCopying(entryIndex, _values.Length, extraCapacity);
-      Console.WriteLine("COMPACT");
-    }
-    else*/
-    {
-      var newCapacity = Math.Max(
-        Math.Max(_valuesCapacityUsed + extraCapacity, _values.Length * 2),
-        DefaultValuesListSize);
-
-      ResizeValuesAndCompactWhileCopying(entryIndex, newCapacity, extraCapacity);
-    }
-
-    // 1, 2, 4, 8, 16
-
-    return;
-
-    var map = this.ValueListMapView;
-
-    if (_valuesCapacityUsed > _values.Length / 2)
-    {
-      // if fill ratio is high, copy to new array and compactify
-
-
+      var capacity = Math.Max(extraCapacity, DefaultValuesListSize);
+      _values = new TValue[capacity];
+      _indexes = new int[capacity];
     }
     else
     {
+      var capacity = Math.Max(
+        Math.Max(_valuesCount - _valueFreeCount + extraCapacity, _values.Length * 2),
+        DefaultValuesListSize);
 
+      var newValues = new TValue[capacity];
+      var newIndexes = new int[capacity];
+      var newValuesIndex = 0;
 
-      // capacity is low, but we need more space then available
-
-
-
-      var index = 0;
-      var count = (uint) _count;
+      var keyIndex = 0;
+      var keyCount = (uint) _keyCount;
       var entries = _entries!;
 
-      while ((uint)index < count)
+      while ((uint) keyIndex < keyCount)
       {
-        ref var entry = ref entries[index++];
+        ref var entry = ref entries[keyIndex++];
 
         if (entry.Next >= -1)
         {
-          //var maskIndex = entry.StartIndex / 64;
-          //var maskShift = entry.StartIndex & 63;
+          var newStartIndex = newValuesIndex;
+          var endIndex = entry.EndIndex;
+          for (var index = entry.StartIndex; index != endIndex; index = _indexes[index])
+          {
+            newValues[newValuesIndex] = _values[index];
+            newIndexes[newValuesIndex] = newValuesIndex + 1;
+            newValuesIndex++;
+          }
 
+          newValues[newValuesIndex] = _values[endIndex];
+          newIndexes[newValuesIndex] = _indexes[endIndex]; // copy count
+
+          entry.StartIndex = newStartIndex;
+          entry.EndIndex = newValuesIndex;
+          newValuesIndex++;
         }
       }
 
-      /*
-      ranges.Sort(); // todo: special comparer
-      */
+      _values = newValues;
+      _indexes = newIndexes;
+      _valuesCount = newValuesIndex;
+      _valueFreeCount = 0;
+      _valueFreeList = -1;
 
-      // holes
-
-
-      // fill ratio is low, can we compact in-place?
-
-      //var newCapacity = Math.Max(_values.Length * 2, DefaultValuesListSize);
-
-      //Array.Resize(ref _values, newCapacity);
+      Debug.Assert(_valuesCount < _values.Length);
     }
-  }
-
-  private void ResizeValuesAndCompactWhileCopying(int entryIndex, int newCapacity, int extraCapacity)
-  {
-    var newArray = new TValue[newCapacity];
-    var newArrayIndex = 0;
-
-    var index = 0;
-    var count = (uint) _count;
-    var entries = _entries!;
-
-    while ((uint) index < count)
-    {
-      // skip currently modified list
-      if (index == entryIndex)
-      {
-        index++;
-        continue;
-      }
-
-      ref var entry = ref entries[index++];
-
-      if (entry.Next >= -1)
-      {
-        Array.Copy(_values, entry.StartIndex, newArray, newArrayIndex, entry.Count);
-
-        // if less than half of value list capacity used - reduce the capacity to twice the used count
-        //entry.Capacity = (entry.Count < entry.Capacity / 2) ? Math.Max(entry.Count * 2, 1) : entry.Capacity;
-        if (entry.Capacity - entry.Count > 4)
-          entry.Capacity = entry.Count + 4;
-        else
-          entry.Capacity = entry.Capacity; //Math.Max(entry.Count * 2, 1);
-
-        entry.StartIndex = newArrayIndex;
-
-        newArrayIndex += entry.Capacity;
-      }
-    }
-
-    // copy last
-    {
-      ref var lastEntry = ref entries[entryIndex];
-
-      if (lastEntry.Capacity == 0)
-      {
-        lastEntry.StartIndex = newArrayIndex;
-      }
-      else
-      {
-        Array.Copy(_values, lastEntry.StartIndex, newArray, newArrayIndex, lastEntry.Count);
-
-        lastEntry.StartIndex = newArrayIndex;
-        newArrayIndex += lastEntry.Capacity;
-      }
-    }
-
-    _values = newArray;
-    _valuesFreeStartIndex = newArrayIndex;
-    _valuesCapacityUsed = newArrayIndex;
-
-    var gaps = _gaps;
-    if (gaps != null) Array.Clear(gaps);
-
-    Debug.Assert(_valuesStoredCount <= _valuesCapacityUsed);
-    Debug.Assert(_valuesCapacityUsed <= _values.Length);
   }
 
   private ref Entry FindEntry(TKey key)
   {
+    // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
     if (key == null)
     {
       ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
@@ -1031,7 +690,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       if (!Unsafe.IsNullRef(ref entry))
       {
-        return new ValuesList(this, entry.StartIndex, entry.Count);
+        return new ValuesList(this, entry.StartIndex, entry.EndIndex);
       }
 
       return new ValuesList(this);
@@ -1064,19 +723,19 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
       // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
-      while ((uint) _index < (uint) _dictionary._count)
+      while ((uint) _index < (uint) _dictionary._keyCount)
       {
         ref var entry = ref _dictionary._entries![_index++];
 
         if (entry.Next >= -1)
         {
           _current = new KeyValuePair<TKey, ValuesList>(
-            entry.Key, new ValuesList(_dictionary, entry.StartIndex, entry.Count));
+            entry.Key, new ValuesList(_dictionary, entry.StartIndex, entry.EndIndex));
           return true;
         }
       }
 
-      _index = _dictionary._count + 1;
+      _index = _dictionary._keyCount + 1;
       _current = default;
       return false;
     }
@@ -1092,6 +751,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
     private readonly int _version;
     private readonly int _startIndex;
+    private readonly int _endIndex;
     private readonly int _count;
 
     public ValuesList(MultiValueDictionarySlim<TKey, TValue> dictionary)
@@ -1099,15 +759,17 @@ public class MultiValueDictionarySlim<TKey, TValue>
       _dictionary = dictionary;
       _version = dictionary._version;
       _startIndex = 0;
+      _endIndex = 0;
       _count = 0;
     }
 
-    internal ValuesList(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int count)
+    internal ValuesList(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
     {
       _dictionary = dictionary;
       _version = dictionary._version;
       _startIndex = startIndex;
-      _count = count;
+      _endIndex = endIndex;
+      _count = dictionary._indexes[endIndex];
     }
 
     public int Count => _count;
@@ -1185,6 +847,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
         return Array.Empty<TValue>();
 
       var array = new TValue[_count];
+
+      // todo: for loop
+
       Array.Copy(_dictionary._values, _startIndex, array, destinationIndex: 0, _count);
       return array;
     }
@@ -1209,129 +874,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
         : $"[{Key}, <Count = {Values.Length}>]";
     }
   }
-
-  public void TrimExcess()
-  {
-    var newKeyCapacity = HashHelpers.GetPrime(_count);
-    var oldEntries = _entries;
-    var currentCapacity = oldEntries == null ? 0 : oldEntries.Length;
-    if (newKeyCapacity < currentCapacity)
-    {
-      var oldCount = _count;
-      _version++;
-      Initialize(newKeyCapacity);
-
-      Debug.Assert(oldEntries != null);
-
-      CopyEntries(oldEntries, oldCount);
-    }
-
-    if (_valuesStoredCount < _values.Length)
-    {
-      CompactValues();
-    }
-
-    void CopyEntries(Entry[] entries, int count)
-    {
-      Debug.Assert(_entries != null);
-
-      var newEntries = _entries;
-      var newCount = 0;
-      for (var i = 0; i < count; i++)
-      {
-        var hashCode = entries[i].HashCode;
-        if (entries[i].Next >= -1)
-        {
-          ref var entry = ref newEntries[newCount];
-          entry = entries[i];
-          ref var bucket = ref GetBucket(hashCode);
-          entry.Next = bucket - 1; // Value in _buckets is 1-based
-          bucket = newCount + 1;
-          newCount++;
-        }
-      }
-
-      _count = newCount;
-      _freeCount = 0;
-    }
-
-    void CompactValues()
-    {
-      var keyCount = (uint) _count;
-      if (keyCount == 0)
-      {
-        _values = s_emptyValues;
-        _valuesFreeStartIndex = 0;
-        return;
-      }
-
-      var newArray = new TValue[_valuesStoredCount];
-      var newArrayIndex = 0;
-      var keyIndex = 0;
-
-      Debug.Assert(_entries != null);
-      var entries = _entries;
-
-      while ((uint) keyIndex < keyCount)
-      {
-        ref var entry = ref entries[keyIndex++];
-
-        if (entry.Next >= -1)
-        {
-          Array.Copy(_values, entry.StartIndex, newArray, newArrayIndex, entry.Count);
-
-          entry.StartIndex = newArrayIndex;
-          entry.Capacity = entry.Count;
-
-          newArrayIndex += entry.Count;
-        }
-      }
-
-      _values = newArray;
-      _valuesFreeStartIndex = newArrayIndex;
-      _valuesCapacityUsed = newArrayIndex;
-    }
-  }
-
-  public string ValueListMapView
-  {
-    get
-    {
-      var sb = new StringBuilder(_values.Length);
-      sb.Append('_', _values.Length);
-
-      var index = 0;
-      var count = (uint)_count;
-      var entries = _entries!;
-      var list = new List<(int start, int end)>();
-
-      while ((uint)index < count)
-      {
-        ref var entry = ref entries[index++];
-
-        if (entry.Next >= -1 && entry.Capacity > 0)
-        {
-          for (var j = 0; j < entry.Capacity; j++)
-          {
-            sb[entry.StartIndex + j] = j < entry.Count ? '#' : '+';
-          }
-
-          list.Add((entry.StartIndex, entry.StartIndex + entry.Capacity));
-        }
-      }
-
-      list.Sort();
-
-      for (var i = list.Count - 1; i >= 0; i--)
-      {
-        var (start, end) = list[i];
-        sb.Insert(end, ']');
-        sb.Insert(start, '[');
-      }
-
-      return sb.ToString();
-    }
-  }
 }
 
 internal sealed class MultiValueDictionarySlimDebugView<TKey, TValue>
@@ -1353,7 +895,9 @@ internal sealed class MultiValueDictionarySlimDebugView<TKey, TValue>
       var index = 0;
 
       foreach (var (key, values) in _dictionary)
+      {
         entries[index++] = new MultiValueDictionarySlim<TKey, TValue>.Pair(key, values.ToArray());
+      }
 
       return entries;
     }
