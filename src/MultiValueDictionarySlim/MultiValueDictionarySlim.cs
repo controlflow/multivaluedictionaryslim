@@ -464,7 +464,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   private void ResizeKeys()
   {
-    // todo: count?
+    Debug.Assert(_keyFreeCount == 0); // only resize when freelist is empty
     ResizeKeys(HashHelpers.ExpandPrime(_keyCount));
   }
 
@@ -697,7 +697,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
         return new ValuesList(this, entry.StartIndex, entry.EndIndex);
       }
 
-      return new ValuesList(this);
+      return new ValuesList(this, startIndex: 0, endIndex: -1);
     }
   }
 
@@ -747,7 +747,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
     public KeyValuePair<TKey, ValuesList> Current => _current;
   }
 
-  // todo: debug view
   [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
   [DebuggerDisplay("Count = {Count}")]
   public readonly struct ValuesList
@@ -756,16 +755,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
     private readonly int _version;
     private readonly int _startIndex;
     private readonly int _endIndex;
-    private readonly int _count;
-
-    public ValuesList(MultiValueDictionarySlim<TKey, TValue> dictionary)
-    {
-      _dictionary = dictionary;
-      _version = dictionary._version;
-      _startIndex = 0;
-      _endIndex = 0;
-      _count = 0;
-    }
 
     internal ValuesList(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
     {
@@ -773,11 +762,10 @@ public class MultiValueDictionarySlim<TKey, TValue>
       _version = dictionary._version;
       _startIndex = startIndex;
       _endIndex = endIndex;
-      _count = dictionary._indexes[endIndex];
     }
 
-    public int Count => _count;
-    public bool IsEmpty => _count == 0;
+    public int Count => _endIndex < 0 ? 0 : _dictionary._indexes[_endIndex];
+    public bool IsEmpty => _endIndex < 0;
 
     public Enumerator GetEnumerator()
     {
@@ -786,45 +774,42 @@ public class MultiValueDictionarySlim<TKey, TValue>
         ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
       }
 
-      return new Enumerator(_dictionary, _version, _startIndex, _count);
-    }
-
-    public TValue this[int index]
-    {
-      get
-      {
-        if ((uint) index >= (uint) _count)
-          ThrowHelper.ThrowArgumentOutOfRangeException(nameof(index));
-
-        return _dictionary._values[_startIndex + index];
-      }
-      // todo: implement set?
+      return new Enumerator(_dictionary, _startIndex, _endIndex);
     }
 
     public struct Enumerator
     {
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
       private readonly int _version;
-      private readonly int _finalIndex;
-      private int _indexInList;
+      private readonly int _endIndex;
+      private int _currentIndex;
       private TValue? _current;
 
-      public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int version, int startIndex, int count)
+      public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
       {
         _dictionary = dictionary;
-        _version = version;
-        _indexInList = startIndex;
-        _finalIndex = startIndex + count;
+        _version = dictionary._version;
+        _endIndex = endIndex;
+        _currentIndex = ~startIndex;
         _current = default;
       }
 
       public bool MoveNext()
       {
         var dictionary = _dictionary;
-        if (_version == dictionary._version && (uint)_indexInList < (uint)_finalIndex)
+        if (_version == dictionary._version && _currentIndex != _endIndex)
         {
-          _current = dictionary._values[_indexInList];
-          _indexInList++;
+          if (_currentIndex < 0)
+          {
+            _currentIndex = ~_currentIndex;
+            _current = dictionary._values[_currentIndex];
+          }
+          else
+          {
+            _currentIndex = dictionary._indexes[_currentIndex];
+            _current = dictionary._values[_currentIndex];
+          }
+
           return true;
         }
 
@@ -847,14 +832,29 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public TValue[] ToArray()
     {
-      if (_count == 0)
+      if (_version != _dictionary._version)
+      {
+        ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
+      }
+
+      var count = _dictionary._indexes[_endIndex];
+      if (count == 0)
         return Array.Empty<TValue>();
 
-      var array = new TValue[_count];
+      var array = new TValue[count];
+      var arrayIndex = 0;
 
-      // todo: for loop
+      var values = _dictionary._values;
+      var indexes = _dictionary._indexes;
+      var endIndex = _endIndex;
 
-      Array.Copy(_dictionary._values, _startIndex, array, destinationIndex: 0, _count);
+      for (var index = _startIndex; index != endIndex; index = indexes[index])
+      {
+        array[arrayIndex++] = values[index];
+      }
+
+      array[arrayIndex] = values[endIndex];
+
       return array;
     }
   }

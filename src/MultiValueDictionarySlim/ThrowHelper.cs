@@ -55,7 +55,7 @@ namespace System.Collections.Generic
     [DoesNotReturn]
     public static void ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion()
     {
-      throw new ArgumentException();
+      throw new InvalidOperationException();
     }
 
     [DoesNotReturn]

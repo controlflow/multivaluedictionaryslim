@@ -28,11 +28,41 @@ public class MultiValueDictionarySlimTests
     Assert.AreEqual(3, dictionary.KeysCapacity);
     Assert.AreEqual(8, dictionary.ValuesCapacity);
 
+    Assert.IsFalse(dictionary.ContainsKey(0));
+    Assert.IsTrue(dictionary[0].IsEmpty);
     Assert.AreEqual(0, dictionary[0].Count);
+
+    var enumerator0 = dictionary[0].GetEnumerator();
+    Assert.IsFalse(enumerator0.MoveNext());
+    Assert.AreEqual(default(string), enumerator0.Current);
+    Assert.IsFalse(enumerator0.MoveNext());
+
+    Assert.IsFalse(dictionary.ContainsKey(-2));
+    Assert.IsTrue(dictionary[-2].IsEmpty);
     Assert.AreEqual(0, dictionary[-2].Count);
-    Assert.AreEqual(3, dictionary[1].Count);
+
+    Assert.IsTrue(dictionary.ContainsKey(1));
+    var valuesList1 = dictionary[1];
+    Assert.IsFalse(valuesList1.IsEmpty);
+    Assert.AreEqual(3, valuesList1.Count);
+
+    var enumerator1 = valuesList1.GetEnumerator(); // -11,13
+    Assert.IsTrue(enumerator1.MoveNext()); // 11,13 after
+    Assert.AreEqual("11", enumerator1.Current);
+    Assert.IsTrue(enumerator1.MoveNext()); // 12,13
+    Assert.AreEqual("12", enumerator1.Current);
+    Assert.IsTrue(enumerator1.MoveNext()); // 13,13
+    Assert.AreEqual("13", enumerator1.Current);
+    Assert.IsFalse(enumerator1.MoveNext());
+
+    Assert.IsTrue(dictionary.ContainsKey(2));
+    Assert.IsFalse(dictionary[2].IsEmpty);
     Assert.AreEqual(2, dictionary[2].Count);
+
+    Assert.IsTrue(dictionary.ContainsKey(3));
+    Assert.IsFalse(dictionary[3].IsEmpty);
     Assert.AreEqual(2, dictionary[3].Count);
+    Assert.AreEqual(new[] { "31", "32" }, dictionary[3].ToArray());
 
     Assert.IsFalse(dictionary.Remove(0));
     Assert.IsTrue(dictionary.Remove(2));
@@ -47,8 +77,21 @@ public class MultiValueDictionarySlimTests
     dictionary.Add(7, "72");
     dictionary.Add(7, "73");
 
+    Assert.Throws<InvalidOperationException>(() => valuesList1.ToArray());
+    Assert.Throws<InvalidOperationException>(() => enumerator1.MoveNext());
+
     Assert.AreEqual(3, dictionary.Count);
     Assert.AreEqual(8, dictionary.ValuesCount);
+    Assert.AreEqual(3, dictionary.KeysCapacity);
+    Assert.AreEqual(8, dictionary.ValuesCapacity);
+
+    Assert.IsTrue(dictionary.ContainsKey(7));
+    Assert.IsFalse(dictionary[7].IsEmpty);
+    Assert.AreEqual(3, dictionary[7].Count);
+    Assert.AreEqual(new[] { "71", "72", "73" }, dictionary[7].ToArray());
+
+    dictionary.Clear();
+
     Assert.AreEqual(3, dictionary.KeysCapacity);
     Assert.AreEqual(8, dictionary.ValuesCapacity);
   }
@@ -151,16 +194,8 @@ public class MultiValueDictionarySlimTests
 
     if (dictionarySlim.ValuesCapacity > 0)
     {
-      _fillRatios.Add(dictionarySlim.ValuesCount / (double) dictionarySlim.ValuesCapacity);
-      //_usedCapacities.Add(dictionarySlim.ValuesUsedCapacity / (double) dictionarySlim.ValuesCapacity);
-      _totalCapacity += dictionarySlim.ValuesCapacity;
+
     }
-
-    //dictionarySlim.TrimExcess();
-
-    //Console.WriteLine(dictionarySlim.ValueListMapView);
-
-    //throw null;
 
     AssertEqual(dictionarySlim, dictionary);
   }
@@ -288,18 +323,6 @@ public class MultiValueDictionarySlimTests
     public int GetHashCode(T obj) => 42;
   }
 
-  private readonly List<double> _fillRatios = new();
-  private readonly List<double> _usedCapacities = new();
-  private int _totalCapacity;
-
-  [OneTimeTearDown]
-  public void TearDown()
-  {
-    Console.WriteLine($"Fill ratio: {_fillRatios.Average():P}");
-    Console.WriteLine($"Used capacity: {_usedCapacities.Average():P}");
-    Console.WriteLine($"Total capacity: {_totalCapacity}");
-  }
-
   private string RandomString()
   {
     Span<byte> buffer = stackalloc byte[_random.Next(4, 10)];
@@ -335,13 +358,17 @@ public class MultiValueDictionarySlimTests
       ListsEqualViaEnumerators(list, slimList);
     }
 
+    return;
+
     void ListsEqualViaIndexer(List<TValue> list, MultiValueDictionarySlim<TKey, TValue>.ValuesList slimList)
     {
       Assert.AreEqual(slimList.Count, list.Count);
 
-      for (int index = 0, count = list.Count; index < count; index++)
+      var index = 0;
+      foreach (var value in slimList)
       {
-        Assert.AreEqual(slimList[index], list[index]);
+        Assert.AreEqual(value, list[index]);
+        index++;
       }
     }
 
