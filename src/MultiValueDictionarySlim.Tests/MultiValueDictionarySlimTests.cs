@@ -1,6 +1,6 @@
 ﻿using NUnit.Framework;
 
-namespace OneToListMap.Tests;
+namespace ControlFlow.Collections.Tests;
 
 public class MultiValueDictionarySlimTests
 {
@@ -60,9 +60,10 @@ public class MultiValueDictionarySlimTests
     Assert.AreEqual(2, dictionary[2].Count);
 
     Assert.IsTrue(dictionary.ContainsKey(3));
-    Assert.IsFalse(dictionary[3].IsEmpty);
-    Assert.AreEqual(2, dictionary[3].Count);
-    Assert.AreEqual(new[] { "31", "32" }, dictionary[3].ToArray());
+    var valuesList3 = dictionary[3];
+    Assert.IsFalse(valuesList3.IsEmpty);
+    Assert.AreEqual(2, valuesList3.Count);
+    Assert.AreEqual(new[] { "31", "32" }, valuesList3.ToArray());
 
     Assert.IsFalse(dictionary.Remove(0));
     Assert.IsTrue(dictionary.Remove(2));
@@ -94,6 +95,14 @@ public class MultiValueDictionarySlimTests
 
     Assert.AreEqual(3, dictionary.KeysCapacity);
     Assert.AreEqual(8, dictionary.ValuesCapacity);
+
+    var enumeratorKeyValue = dictionary.GetEnumerator();
+    for (var index = 0; index < dictionary.Count; index++)
+    {
+      Assert.IsTrue(enumeratorKeyValue.MoveNext());
+    }
+
+    Assert.IsFalse(enumeratorKeyValue.MoveNext());
   }
 
   [Test]
@@ -289,12 +298,14 @@ public class MultiValueDictionarySlimTests
       AssertConsistent();
     }
 
+    return;
+
     void AssertConsistent()
     {
-      foreach (var (key, values) in dictionarySlim)
+      foreach (var pair in dictionarySlim)
       {
-        int x = key * 100;
-        foreach (var i in values.ToArray())
+        var x = pair.Key * 100;
+        foreach (var i in pair.Value.ToArray())
         {
           Assert.AreEqual(x, i);
           x++;
@@ -325,7 +336,7 @@ public class MultiValueDictionarySlimTests
 
   private string RandomString()
   {
-    Span<byte> buffer = stackalloc byte[_random.Next(4, 10)];
+    var buffer = new byte[_random.Next(4, 10)];
     _random.NextBytes(buffer);
 
     return Convert.ToBase64String(buffer);
@@ -338,29 +349,29 @@ public class MultiValueDictionarySlimTests
   {
     Assert.AreEqual(dictionary.Count, dictionarySlim.Count);
 
-    foreach (var (key, list) in dictionary)
+    foreach (var pair in dictionary)
     {
-      Assert.IsTrue(dictionarySlim.ContainsKey(key));
+      Assert.IsTrue(dictionarySlim.ContainsKey(pair.Key));
 
-      var slimList = dictionarySlim[key];
-      Assert.AreEqual(list.Count, slimList.Count);
-      CollectionAssert.AreEqual(list, slimList.ToArray());
-      ListsEqualViaIndexer(list, slimList);
-      ListsEqualViaEnumerators(list, slimList);
+      var slimList = dictionarySlim[pair.Key];
+      Assert.AreEqual(pair.Value.Count, slimList.Count);
+      CollectionAssert.AreEqual(pair.Value, slimList.ToArray());
+      ListsEqualViaIndexer(pair.Value, slimList);
+      ListsEqualViaEnumerators(pair.Value, slimList);
     }
 
-    foreach (var (key, slimList) in dictionarySlim)
+    foreach (var pair in dictionarySlim)
     {
-      var list = dictionary[key];
-      Assert.AreEqual(slimList.Count, list.Count);
-      CollectionAssert.AreEqual(slimList.ToArray(), list);
-      ListsEqualViaIndexer(list, slimList);
-      ListsEqualViaEnumerators(list, slimList);
+      var list = dictionary[pair.Key];
+      Assert.AreEqual(pair.Value.Count, list.Count);
+      CollectionAssert.AreEqual(pair.Value.ToArray(), list);
+      ListsEqualViaIndexer(list, pair.Value);
+      ListsEqualViaEnumerators(list, pair.Value);
     }
 
     return;
 
-    void ListsEqualViaIndexer(List<TValue> list, MultiValueDictionarySlim<TKey, TValue>.ValuesList slimList)
+    void ListsEqualViaIndexer(List<TValue> list, MultiValueDictionarySlim<TKey, TValue>.ValuesCollection slimList)
     {
       Assert.AreEqual(slimList.Count, list.Count);
 
@@ -372,7 +383,7 @@ public class MultiValueDictionarySlimTests
       }
     }
 
-    void ListsEqualViaEnumerators(List<TValue> list, MultiValueDictionarySlim<TKey, TValue>.ValuesList slimList)
+    void ListsEqualViaEnumerators(List<TValue> list, MultiValueDictionarySlim<TKey, TValue>.ValuesCollection slimList)
     {
       using var listEnumerator = list.GetEnumerator();
       var slimListEnumerator = slimList.GetEnumerator();

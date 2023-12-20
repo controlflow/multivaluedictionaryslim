@@ -2,10 +2,10 @@
 
   <PropertyGroup>
     <Nullable>enable</Nullable>
-    <LangVersion>10</LangVersion>
-    <TargetFramework>net7.0</TargetFramework>
+    <LangVersion>default</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <RootNamespace>OneToListMap</RootNamespace>
+    <RootNamespace>ControlFlow.Collections</RootNamespace>
+    <TargetFrameworks>net8.0;net472</TargetFrameworks>
   </PropertyGroup>
 
 </Project>

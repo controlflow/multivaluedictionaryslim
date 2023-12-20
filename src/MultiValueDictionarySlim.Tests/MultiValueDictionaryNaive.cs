@@ -1,6 +1,6 @@
 using System.Collections;
 
-namespace OneToListMap.Tests;
+namespace ControlFlow.Collections.Tests;
 
 public class MultiValueDictionaryNaive<TKey, TValue> : IEnumerable<KeyValuePair<TKey, List<TValue>>>
   where TKey : notnull
@@ -34,9 +34,9 @@ public class MultiValueDictionaryNaive<TKey, TValue> : IEnumerable<KeyValuePair<
 
   public IEnumerator<KeyValuePair<TKey, List<TValue>>> GetEnumerator()
   {
-    foreach (var (key, list) in _dictionary)
+    foreach (var pair in _dictionary)
     {
-      yield return new KeyValuePair<TKey, List<TValue>>(key, list);
+      yield return new KeyValuePair<TKey, List<TValue>>(pair.Key, pair.Value);
     }
   }
 

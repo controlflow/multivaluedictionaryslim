@@ -1,28 +1,18 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Text;
 
 // ReSharper disable IntroduceOptionalParameters.Global
 // ReSharper disable UseArrayEmptyMethod
 // ReSharper disable MemberHidesStaticFromOuterClass
-
 // ReSharper disable MergeConditionalExpression
-// ReSharper disable ConditionIsAlwaysTrueOrFalse
 
-namespace System.Collections.Generic;
+namespace ControlFlow.Collections;
 
-// todo: keys collection
+// todo: all keys collection
 // todo: all values collection
-// todo: do we need separate capacity for values? can it be lower?
-// todo: count + start index = int
-// todo: one item price must be low
-// todo: sequential addition price must be low
-// todo: must be poolable, big sequential chunks
-// todo: ushort start + ushort count = can't address much items
-// todo: [k1, 111], [k2, 111], [k1, 222], [k2, 222] problem
-// todo: [1][2][1,1,1,1][3][2,2,2] - 11223
-// todo: 1 int per item?
-// todo: store count somewhere?
 
 [DebuggerTypeProxy(typeof(MultiValueDictionarySlimDebugView<,>))]
 [DebuggerDisplay("Count = {Count}")]
@@ -40,13 +30,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   private readonly IEqualityComparer<TKey>? _comparer;
 
-  private const int StartOfFreeList = -3;
-
   private int _keyFreeList;
   private int _keyFreeCount;
   private int _valueFreeList;
   private int _valueFreeCount;
 
+  private const int StartOfFreeList = -3;
   private const int DefaultValuesListSize = 4;
 
   private static readonly TValue[] s_emptyValues = new TValue[0];
@@ -65,7 +54,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public TKey Key;
 
-    // can be 0
+    /// <summary>
+    /// 0-based index in <see cref="MultiValueDictionarySlim{TKey,TValue}._values"/> list
+    /// </summary>
     public int StartIndex;
 
     // can be 0, can be the same as StartIndex
@@ -111,14 +102,14 @@ public class MultiValueDictionarySlim<TKey, TValue>
   public int Count => _keyCount - _keyFreeCount;
   public int ValuesCount => _valuesCount - _valueFreeCount;
 
-  public IEqualityComparer<TKey> Comparer => _comparer ?? EqualityComparer<TKey>.Default;
-
   public int KeysCapacity => _entries == null ? 0 : _entries.Length;
   public int ValuesCapacity => _values.Length;
 
+  public IEqualityComparer<TKey> Comparer => _comparer ?? EqualityComparer<TKey>.Default;
+
   public void Add(TKey key, TValue value)
   {
-    var entryIndex = GetOrCreateKeyEntry(key);
+    var entryIndex = GetOrCreateEntry(key);
 
     ref var entry = ref _entries![entryIndex];
 
@@ -172,7 +163,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
     if (key == null)
     {
-      ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
+      ThrowHelper.ThrowArgumentNullException(nameof(key));
     }
 
     if (_buckets != null)
@@ -183,7 +174,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       var hashCode = (uint)(_comparer?.GetHashCode(key) ?? key.GetHashCode());
 
       ref var bucket = ref GetBucket(hashCode);
-      var entries = _entries;
+      var entries = _entries!;
       var last = -1;
       var i = bucket - 1; // Value in buckets is 1-based
 
@@ -207,12 +198,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
             "shouldn't underflow because max hashtable length is MaxPrimeArrayLength = 0x7FEFFFFD(2146435069) _freelist underflow threshold 2147483646");
           entry.Next = StartOfFreeList - _keyFreeList;
 
-          if (RuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
+          if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
           {
             entry.Key = default!;
           }
 
-          if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+          if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
           {
             // O(n) removal, unfortunately
             var endIndex = entry.EndIndex;
@@ -257,7 +248,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   public bool ContainsKey(TKey key)
   {
-    return !Unsafe.IsNullRef(ref FindEntry(key));
+    var entryIndex = FindEntryIndex(key);
+    return entryIndex >= 0;
   }
 
   public void Clear()
@@ -280,7 +272,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     Array.Clear(_entries, 0, count);
 
-    if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+    if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
     {
       Array.Clear(_values, 0, _valuesCount);
     }
@@ -294,19 +286,16 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     // Assign member variables after both arrays allocated to guard against corruption from OOM if second fails
     _keyFreeList = -1;
-#if TARGET_64BIT
-    _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)size);
-#endif
     _buckets = buckets;
     _entries = entries;
   }
 
-  private int GetOrCreateKeyEntry(TKey key)
+  private int GetOrCreateEntry(TKey key)
   {
     // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
     if (key == null)
     {
-      ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
+      ThrowHelper.ThrowArgumentNullException(nameof(key));
     }
 
     if (_buckets == null)
@@ -337,7 +326,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
           // Test uint in if rather than loop condition to drop range check for following array access
           if ((uint)i >= (uint)entries.Length)
           {
-            break;
+            break; // not found
           }
 
           if (entries[i].HashCode == hashCode && EqualityComparer<TKey>.Default.Equals(entries[i].Key, key))
@@ -356,7 +345,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
           }
         }
       }
-      else
+      else // reference type
       {
         // Object type: Shared Generic, EqualityComparer<TValue>.Default won't devirtualize
         // https://github.com/dotnet/runtime/issues/10050
@@ -368,7 +357,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
           // Test uint in if rather than loop condition to drop range check for following array access
           if ((uint)i >= (uint)entries.Length)
           {
-            break;
+            break; // not found
           }
 
           if (entries[i].HashCode == hashCode && defaultComparer.Equals(entries[i].Key, key))
@@ -388,7 +377,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
         }
       }
     }
-    else
+    else // custom comparer
     {
       while (true)
       {
@@ -420,7 +409,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
     if (_keyFreeCount > 0)
     {
       index = _keyFreeList;
-      Debug.Assert((StartOfFreeList - entries[_keyFreeList].Next) >= -1, "shouldn't overflow because `next` cannot underflow");
+      Debug.Assert(StartOfFreeList - entries[_keyFreeList].Next >= -1, "shouldn't overflow because `next` cannot underflow");
+
       _keyFreeList = StartOfFreeList - entries[_keyFreeList].Next;
       _keyFreeCount--;
     }
@@ -451,15 +441,117 @@ public class MultiValueDictionarySlim<TKey, TValue>
     return index;
   }
 
+  private int FindEntryIndex(TKey key)
+  {
+    // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+    if (key == null)
+    {
+      ThrowHelper.ThrowArgumentNullException(nameof(key));
+    }
+
+    if (_buckets == null) return -1;
+
+    Debug.Assert(_entries != null, "expected entries to be != null");
+
+    var comparer = _comparer;
+    if (comparer == null)
+    {
+      var hashCode = (uint)key.GetHashCode();
+      var i = GetBucket(hashCode);
+      var entries = _entries!;
+      uint collisionCount = 0;
+
+      if (typeof(TKey).IsValueType)
+      {
+        // ValueType: Devirtualize with EqualityComparer<TValue>.Default intrinsic
+
+        i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
+        do
+        {
+          // Should be a while loop https://github.com/dotnet/runtime/issues/9422
+          // Test in if to drop range check for following array access
+          if ((uint)i >= (uint)entries.Length)
+          {
+            return -1;
+          }
+
+          if (entries[i].HashCode == hashCode && EqualityComparer<TKey>.Default.Equals(entries[i].Key, key))
+          {
+            return i;
+          }
+
+          i = entries[i].Next;
+
+          collisionCount++;
+        } while (collisionCount <= (uint)entries.Length);
+      }
+      else // reference type
+      {
+        // Object type: Shared Generic, EqualityComparer<TValue>.Default won't devirtualize
+        // https://github.com/dotnet/runtime/issues/10050
+        // So cache in a local rather than get EqualityComparer per loop iteration
+        var defaultComparer = EqualityComparer<TKey>.Default;
+
+        i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
+        do
+        {
+          // Should be a while loop https://github.com/dotnet/runtime/issues/9422
+          // Test in if to drop range check for following array access
+          if ((uint)i >= (uint)entries.Length)
+          {
+            return -1;
+          }
+
+          if (entries[i].HashCode == hashCode && defaultComparer.Equals(entries[i].Key, key))
+          {
+            return i;
+          }
+
+          i = entries[i].Next;
+
+          collisionCount++;
+        }
+        while (collisionCount <= (uint)entries.Length);
+      }
+    }
+    else // custom comparer
+    {
+      var hashCode = (uint)comparer.GetHashCode(key);
+      var i = GetBucket(hashCode);
+      var entries = _entries!;
+      uint collisionCount = 0;
+      i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
+      do
+      {
+        // Should be a while loop https://github.com/dotnet/runtime/issues/9422
+        // Test in if to drop range check for following array access
+        if ((uint)i >= (uint)entries.Length)
+        {
+          return -1;
+        }
+
+        if (entries[i].HashCode == hashCode && comparer.Equals(entries[i].Key, key))
+        {
+          return i;
+        }
+
+        i = entries[i].Next;
+
+        collisionCount++;
+      } while (collisionCount <= (uint)entries.Length);
+    }
+
+    // The chain of entries forms a loop; which means a concurrent update has happened.
+    // Break out of the loop and throw, rather than looping forever.
+    ThrowHelper.ThrowInvalidOperationException_ConcurrentOperationsNotSupported();
+    return -1;
+  }
+
   [MethodImpl(MethodImplOptions.AggressiveInlining)]
   private ref int GetBucket(uint hashCode)
   {
     var buckets = _buckets!;
-#if TARGET_64BIT
-    return ref buckets[HashHelpers.FastMod(hashCode, (uint)buckets.Length, _fastModMultiplier)];
-#else
     return ref buckets[hashCode % (uint) buckets.Length];
-#endif
   }
 
   private void ResizeKeys()
@@ -480,9 +572,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     // Assign member variables after both arrays allocated to guard against corruption from OOM if second fails
     _buckets = new int[newSize];
-#if TARGET_64BIT
-    _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)newSize);
-#endif
 
     for (var i = 0; i < count; i++)
     {
@@ -555,149 +644,19 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
-  private ref Entry FindEntry(TKey key)
-  {
-    // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-    if (key == null)
-    {
-      ThrowHelper.ThrowArgumentNullException(ExceptionArgument.key);
-    }
-
-    ref var entry = ref Unsafe.NullRef<Entry>();
-    if (_buckets != null)
-    {
-      Debug.Assert(_entries != null, "expected entries to be != null");
-      var comparer = _comparer;
-      if (comparer == null)
-      {
-        var hashCode = (uint)key.GetHashCode();
-        var i = GetBucket(hashCode);
-        var entries = _entries;
-        uint collisionCount = 0;
-        if (typeof(TKey).IsValueType)
-        {
-          // ValueType: Devirtualize with EqualityComparer<TValue>.Default intrinsic
-
-          i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
-          do
-          {
-            // Should be a while loop https://github.com/dotnet/runtime/issues/9422
-            // Test in if to drop range check for following array access
-            if ((uint)i >= (uint)entries.Length)
-            {
-              goto ReturnNotFound;
-            }
-
-            entry = ref entries[i];
-            if (entry.HashCode == hashCode && EqualityComparer<TKey>.Default.Equals(entry.Key, key))
-            {
-              goto ReturnFound;
-            }
-
-            i = entry.Next;
-
-            collisionCount++;
-          } while (collisionCount <= (uint)entries.Length);
-
-          // The chain of entries forms a loop; which means a concurrent update has happened.
-          // Break out of the loop and throw, rather than looping forever.
-          goto ConcurrentOperation;
-        }
-        else
-        {
-          // Object type: Shared Generic, EqualityComparer<TValue>.Default won't devirtualize
-          // https://github.com/dotnet/runtime/issues/10050
-          // So cache in a local rather than get EqualityComparer per loop iteration
-          var defaultComparer = EqualityComparer<TKey>.Default;
-
-          i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
-          do
-          {
-            // Should be a while loop https://github.com/dotnet/runtime/issues/9422
-            // Test in if to drop range check for following array access
-            if ((uint)i >= (uint)entries.Length)
-            {
-              goto ReturnNotFound;
-            }
-
-            entry = ref entries[i];
-            if (entry.HashCode == hashCode && defaultComparer.Equals(entry.Key, key))
-            {
-              goto ReturnFound;
-            }
-
-            i = entry.Next;
-
-            collisionCount++;
-          }
-          while (collisionCount <= (uint)entries.Length);
-
-          // The chain of entries forms a loop; which means a concurrent update has happened.
-          // Break out of the loop and throw, rather than looping forever.
-          goto ConcurrentOperation;
-        }
-      }
-      else
-      {
-        var hashCode = (uint)comparer.GetHashCode(key);
-        var i = GetBucket(hashCode);
-        var entries = _entries;
-        uint collisionCount = 0;
-        i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
-        do
-        {
-          // Should be a while loop https://github.com/dotnet/runtime/issues/9422
-          // Test in if to drop range check for following array access
-          if ((uint)i >= (uint)entries.Length)
-          {
-            goto ReturnNotFound;
-          }
-
-          entry = ref entries[i];
-          if (entry.HashCode == hashCode && comparer.Equals(entry.Key, key))
-          {
-            goto ReturnFound;
-          }
-
-          i = entry.Next;
-
-          collisionCount++;
-        } while (collisionCount <= (uint)entries.Length);
-
-        // The chain of entries forms a loop; which means a concurrent update has happened.
-        // Break out of the loop and throw, rather than looping forever.
-        goto ConcurrentOperation;
-      }
-    }
-
-    goto ReturnNotFound;
-
-    ConcurrentOperation:
-    ThrowHelper.ThrowInvalidOperationException_ConcurrentOperationsNotSupported();
-
-    ReturnFound:
-    ref var value = ref entry;
-
-    Return:
-    return ref value;
-
-    ReturnNotFound:
-    value = ref Unsafe.NullRef<Entry>();
-    goto Return;
-  }
-
-  public ValuesList this[TKey key]
+  public ValuesCollection this[TKey key]
   {
     get
     {
-      ref var entry = ref FindEntry(key);
+      var entryIndex = FindEntryIndex(key);
 
-      if (!Unsafe.IsNullRef(ref entry))
+      if (entryIndex >= 0)
       {
-        return new ValuesList(this, entry.StartIndex, entry.EndIndex);
+        var entries = _entries!;
+        return new ValuesCollection(this, entries[entryIndex].StartIndex, entries[entryIndex].EndIndex);
       }
 
-      return new ValuesList(this, startIndex: 0, endIndex: -1);
+      return new ValuesCollection(this, startIndex: 0, endIndex: -1);
     }
   }
 
@@ -708,7 +667,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
     private readonly int _version;
     private int _index;
-    private KeyValuePair<TKey, ValuesList> _current;
+    private KeyValuePair<TKey, ValuesCollection> _current;
 
     public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
     {
@@ -733,8 +692,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
         if (entry.Next >= -1)
         {
-          _current = new KeyValuePair<TKey, ValuesList>(
-            entry.Key, new ValuesList(_dictionary, entry.StartIndex, entry.EndIndex));
+          _current = new KeyValuePair<TKey, ValuesCollection>(
+            entry.Key, new ValuesCollection(_dictionary, entry.StartIndex, entry.EndIndex));
           return true;
         }
       }
@@ -744,19 +703,19 @@ public class MultiValueDictionarySlim<TKey, TValue>
       return false;
     }
 
-    public KeyValuePair<TKey, ValuesList> Current => _current;
+    public KeyValuePair<TKey, ValuesCollection> Current => _current;
   }
 
   [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
   [DebuggerDisplay("Count = {Count}")]
-  public readonly struct ValuesList
+  public readonly struct ValuesCollection
   {
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
     private readonly int _version;
     private readonly int _startIndex;
     private readonly int _endIndex;
 
-    internal ValuesList(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
+    internal ValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
     {
       _dictionary = dictionary;
       _version = dictionary._version;
@@ -859,17 +818,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
-  internal class Pair
+  [SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
+  internal readonly struct DebugPair(TKey key, TValue[] values)
   {
-    public readonly TKey Key;
+    public readonly TKey Key = key;
     [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-    public readonly TValue[] Values;
-
-    public Pair(TKey key, TValue[] values)
-    {
-      Key = key;
-      Values = values;
-    }
+    public readonly TValue[] Values = values;
 
     public override string ToString()
     {
@@ -880,27 +834,21 @@ public class MultiValueDictionarySlim<TKey, TValue>
   }
 }
 
-internal sealed class MultiValueDictionarySlimDebugView<TKey, TValue>
+[SuppressMessage("ReSharper", "UnusedMember.Local")]
+file sealed class MultiValueDictionarySlimDebugView<TKey, TValue>(MultiValueDictionarySlim<TKey, TValue> dictionary)
   where TKey : notnull
 {
-  private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
-
-  public MultiValueDictionarySlimDebugView(MultiValueDictionarySlim<TKey, TValue> dictionary)
-  {
-    _dictionary = dictionary;
-  }
-
   [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-  private MultiValueDictionarySlim<TKey, TValue>.Pair[] Entries
+  public MultiValueDictionarySlim<TKey, TValue>.DebugPair[] Entries
   {
     get
     {
-      var entries = new MultiValueDictionarySlim<TKey, TValue>.Pair[_dictionary.Count];
+      var entries = new MultiValueDictionarySlim<TKey, TValue>.DebugPair[dictionary.Count];
       var index = 0;
 
-      foreach (var (key, values) in _dictionary)
+      foreach (var pair in dictionary)
       {
-        entries[index++] = new MultiValueDictionarySlim<TKey, TValue>.Pair(key, values.ToArray());
+        entries[index++] = new MultiValueDictionarySlim<TKey, TValue>.DebugPair(pair.Key, pair.Value.ToArray());
       }
 
       return entries;
@@ -908,16 +856,10 @@ internal sealed class MultiValueDictionarySlimDebugView<TKey, TValue>
   }
 }
 
-internal sealed class MultiValueDictionarySlimValueListDebugView<TKey, TValue>
+[SuppressMessage("ReSharper", "UnusedMember.Local")]
+file class MultiValueDictionarySlimValueListDebugView<TKey, TValue>(MultiValueDictionarySlim<TKey, TValue>.ValuesCollection valuesCollection)
   where TKey : notnull
 {
-  private readonly MultiValueDictionarySlim<TKey, TValue>.ValuesList _valuesList;
-
-  public MultiValueDictionarySlimValueListDebugView(MultiValueDictionarySlim<TKey, TValue>.ValuesList valuesList)
-  {
-    _valuesList = valuesList;
-  }
-
   [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-  private TValue[] Entries => _valuesList.ToArray();
+  public TValue[] Entries => valuesCollection.ToArray();
 }
