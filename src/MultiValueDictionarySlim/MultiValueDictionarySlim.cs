@@ -60,8 +60,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
     public int StartIndex;
 
     // can be 0, can be the same as StartIndex
-    // index at EndIndex is a Count or collection
-    // can be -1 for allocated empty entries
+    // _index at EndIndex is a Count or collection
+    // can be -1 for allocated incomplete (empty) entries
     public int EndIndex;
 
     public override string ToString()
@@ -71,13 +71,19 @@ public class MultiValueDictionarySlim<TKey, TValue>
   }
 
   public MultiValueDictionarySlim()
-    : this(keyCapacity: 0, 0, comparer: null) { }
+    : this(keyCapacity: 0, 0, comparer: null)
+  {
+  }
 
   public MultiValueDictionarySlim(int keyCapacity, int valueCapacity)
-    : this(keyCapacity: keyCapacity, valueCapacity, comparer: null) { }
+    : this(keyCapacity: keyCapacity, valueCapacity, comparer: null)
+  {
+  }
 
   public MultiValueDictionarySlim(IEqualityComparer<TKey>? comparer)
-    : this(keyCapacity: 0, valueCapacity: 0, comparer) { }
+    : this(keyCapacity: 0, valueCapacity: 0, comparer)
+  {
+  }
 
   public MultiValueDictionarySlim(int keyCapacity, int valueCapacity, IEqualityComparer<TKey>? comparer)
   {
@@ -221,9 +227,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
           _indexes[entry.EndIndex] = _valueFreeList;
           _valueFreeList = entry.StartIndex;
 
-          // todo: do we need this?
-          //entry.StartIndex = -1;
-          entry.EndIndex = -1;
+          entry.EndIndex = -1; // mark entry as incomplete
 
           _keyFreeList = i;
           _keyFreeCount++;
@@ -510,8 +514,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
           i = entries[i].Next;
 
           collisionCount++;
-        }
-        while (collisionCount <= (uint)entries.Length);
+        } while (collisionCount <= (uint)entries.Length);
       }
     }
     else // custom comparer
@@ -551,7 +554,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
   private ref int GetBucket(uint hashCode)
   {
     var buckets = _buckets!;
-    return ref buckets[hashCode % (uint) buckets.Length];
+    return ref buckets[hashCode % (uint)buckets.Length];
   }
 
   private void ResizeKeys()
@@ -607,10 +610,10 @@ public class MultiValueDictionarySlim<TKey, TValue>
       var newValuesIndex = 0;
 
       var keyIndex = 0;
-      var keyCount = (uint) _keyCount;
+      var keyCount = (uint)_keyCount;
       var entries = _entries!;
 
-      while ((uint) keyIndex < keyCount)
+      while ((uint)keyIndex < keyCount)
       {
         ref var entry = ref entries[keyIndex++];
         if (entry.Next < -1) continue;
@@ -669,6 +672,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     private int _index;
     private KeyValuePair<TKey, ValuesCollection> _current;
 
+    // ReSharper disable once ConvertToPrimaryConstructor
     public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
     {
       _dictionary = dictionary;
@@ -686,7 +690,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
       // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
-      while ((uint) _index < (uint) _dictionary._keyCount)
+      while ((uint)_index < (uint)_dictionary._keyCount)
       {
         ref var entry = ref _dictionary._entries![_index++];
 
@@ -744,6 +748,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       private int _currentIndex;
       private TValue? _current;
 
+      // ReSharper disable once ConvertToPrimaryConstructor
       public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
       {
         _dictionary = dictionary;
@@ -822,6 +827,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
   internal readonly struct DebugPair(TKey key, TValue[] values)
   {
     public readonly TKey Key = key;
+
     [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
     public readonly TValue[] Values = values;
 
