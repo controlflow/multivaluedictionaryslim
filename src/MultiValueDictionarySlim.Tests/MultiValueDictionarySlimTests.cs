@@ -106,6 +106,32 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test]
+  public void AddValuesRange()
+  {
+    const int dataCount = 17;
+
+    var dict1 = new MultiValueDictionarySlim<string, int>();
+    dict1.AddValueRange("enum", Enumerate());
+    Assert.AreEqual(1, dict1.Count);
+    Assert.AreEqual(dataCount, dict1.ValuesCount);
+    Assert.AreEqual(32, dict1.ValuesCapacity);
+
+    var dict2 = new MultiValueDictionarySlim<string, int>();
+    dict2.AddValueRange("list", Enumerate().ToList());
+    Assert.AreEqual(1, dict2.Count);
+    Assert.AreEqual(dataCount, dict2.ValuesCount);
+    Assert.AreEqual(dataCount, dict2.ValuesCapacity);
+
+    return;
+
+    static IEnumerable<int> Enumerate()
+    {
+      for (var index = 0; index < dataCount; index++)
+        yield return index;
+    }
+  }
+
+  [Test]
   [Repeat(1000)]
   public void BasicOperations()
   {
@@ -131,13 +157,34 @@ public class MultiValueDictionarySlimTests
     Assert.AreEqual(0, dictionarySlim.Count);
     Assert.AreEqual(0, dictionarySlim.ValuesCount);
 
+    // todo: AddRange()
+    // todo: Remove of values
+
     for (var operationsCount = _random.Next(0, 500); operationsCount >= 0; operationsCount--)
     {
-      switch (_random.Next(0, 20))
+      switch (_random.Next(minValue: 0, maxValue: 23))
       {
-        case >= 0 and < 18:
+        case >= 0 and < 17:
         {
           var key = _random.Next(0, keysPerCollection);
+          var value = RandomString();
+          var valuesCount = dictionarySlim.ValuesCount;
+
+          dictionarySlim.Add(key, value);
+          dictionary.Add(key, value);
+
+          Assert.AreEqual(dictionary.Count, dictionarySlim.Count);
+          Assert.AreEqual(dictionary.ValuesCount, dictionarySlim.ValuesCount);
+          Assert.AreEqual(valuesCount + 1, dictionarySlim.ValuesCount);
+          break;
+        }
+
+        case 17:
+        {
+          var key = _random.Next(0, keysPerCollection);
+
+          //_random.Next(0, )
+
           var value = RandomString();
           var valuesCount = dictionarySlim.ValuesCount;
 
@@ -169,7 +216,7 @@ public class MultiValueDictionarySlimTests
           break;
         }
 
-        case 19:
+        case 20:
         {
           dictionary.Clear();
           dictionarySlim.Clear();
@@ -180,22 +227,30 @@ public class MultiValueDictionarySlimTests
           break;
         }
 
-        case 20:
+        case 21:
         {
+          var count = dictionarySlim.Count;
+
+          dictionarySlim.TrimExcessKeys();
+
+          Assert.AreEqual(count, dictionarySlim.Count);
+          Assert.IsTrue(dictionarySlim.Count <= dictionarySlim.KeysCapacity);
           break;
         }
 
-        case 21:
+        case 22:
         {
-          var count = dictionary.Count;
+          var valuesCount = dictionarySlim.ValuesCount;
 
-          //dictionary.TrimExcess();
-          //dictionarySlim.TrimExcess();
+          dictionarySlim.TrimExcessValues();
 
-          Assert.AreEqual(count, dictionary.Count);
-          Assert.AreEqual(count, dictionarySlim.Count);
-          Assert.IsTrue(dictionarySlim.Count <= dictionarySlim.KeysCapacity);
-          Assert.IsTrue(dictionarySlim.ValuesCount <= dictionarySlim.ValuesCapacity);
+          Assert.AreEqual(valuesCount, dictionarySlim.ValuesCount);
+          Assert.AreEqual(dictionarySlim.ValuesCount, dictionarySlim.ValuesCapacity);
+          break;
+        }
+
+        case 23:
+        {
           break;
         }
       }

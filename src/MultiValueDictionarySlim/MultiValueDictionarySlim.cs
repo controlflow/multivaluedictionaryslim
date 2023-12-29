@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Runtime.CompilerServices;
 
 // ReSharper disable IntroduceOptionalParameters.Global
@@ -11,6 +12,7 @@ using System.Runtime.CompilerServices;
 
 namespace ControlFlow.Collections;
 
+// todo: AddValueRange
 // todo: all keys collection
 // todo: all values collection
 
@@ -117,48 +119,38 @@ public class MultiValueDictionarySlim<TKey, TValue>
   {
     var entryIndex = GetOrCreateEntry(key);
 
+    StoreEntryValue(ref _entries![entryIndex], value);
+
+    _version++;
+  }
+
+  public void AddValueRange(TKey key, IEnumerable<TValue> values)
+  {
+    var entryIndex = GetOrCreateEntry(key);
+
     ref var entry = ref _entries![entryIndex];
 
-    // allocate a place for value to store
-    int valueIndex;
-    if (_valueFreeCount > 0) // try freelist first
+    // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+    if (values == null) ThrowHelper.ThrowArgumentNullException(nameof(values));
+
+#if NETCOREAPP
+    if (values.TryGetNonEnumeratedCount(out var count))
+#else
+    if (values is System.Collections.ICollection { Count: var count })
+#endif
     {
-      valueIndex = _valueFreeList;
-      Debug.Assert(valueIndex < _values.Length);
-      _valueFreeList = _indexes[valueIndex]; // next freelist index
-      _valueFreeCount--;
+      foreach (var value in values)
+      {
+        StoreEntryValue(ref entry, value, extraCapacity: count);
+        count--;
+      }
     }
     else
     {
-      valueIndex = _valuesCount;
-
-      if (valueIndex == _values.Length) // value list is full
+      foreach (var value in values)
       {
-        ResizeValues();
-
-        Debug.Assert(valueIndex < _values.Length);
-        Debug.Assert(valueIndex < _indexes.Length);
+        StoreEntryValue(ref entry, value, extraCapacity: 1);
       }
-
-      _valuesCount++;
-    }
-
-    if (entry.EndIndex == -1) // new key added
-    {
-      entry.StartIndex = valueIndex;
-      entry.EndIndex = valueIndex;
-
-      _values[valueIndex] = value;
-      _indexes[valueIndex] = 1; // store count
-    }
-    else // key has values associated
-    {
-      var oldCount = _indexes[entry.EndIndex];
-      _indexes[entry.EndIndex] = valueIndex;
-
-      entry.EndIndex = valueIndex; // append new item
-      _values[valueIndex] = value;
-      _indexes[valueIndex] = oldCount + 1; // new count
     }
 
     _version++;
@@ -172,78 +164,77 @@ public class MultiValueDictionarySlim<TKey, TValue>
       ThrowHelper.ThrowArgumentNullException(nameof(key));
     }
 
-    if (_buckets != null)
+    if (_buckets == null) return false;
+
+    Debug.Assert(_entries != null, "entries should be non-null");
+
+    uint collisionCount = 0;
+    var hashCode = (uint)(_comparer?.GetHashCode(key) ?? key.GetHashCode());
+
+    ref var bucket = ref GetBucket(hashCode);
+    var entries = _entries!;
+    var last = -1;
+    var i = bucket - 1; // Value in buckets is 1-based
+
+    while (i >= 0)
     {
-      Debug.Assert(_entries != null, "entries should be non-null");
+      ref var entry = ref entries[i];
 
-      uint collisionCount = 0;
-      var hashCode = (uint)(_comparer?.GetHashCode(key) ?? key.GetHashCode());
-
-      ref var bucket = ref GetBucket(hashCode);
-      var entries = _entries!;
-      var last = -1;
-      var i = bucket - 1; // Value in buckets is 1-based
-
-      while (i >= 0)
+      if (entry.HashCode == hashCode && (_comparer?.Equals(entry.Key, key) ?? EqualityComparer<TKey>.Default.Equals(entry.Key, key)))
       {
-        ref var entry = ref entries[i];
-
-        if (entry.HashCode == hashCode && (_comparer?.Equals(entry.Key, key) ?? EqualityComparer<TKey>.Default.Equals(entry.Key, key)))
+        if (last < 0)
         {
-          if (last < 0)
-          {
-            bucket = entry.Next + 1; // Value in buckets is 1-based
-          }
-          else
-          {
-            entries[last].Next = entry.Next;
-          }
-
-          Debug.Assert(
-            StartOfFreeList - _keyFreeList < 0,
-            "shouldn't underflow because max hashtable length is MaxPrimeArrayLength = 0x7FEFFFFD(2146435069) _freelist underflow threshold 2147483646");
-          entry.Next = StartOfFreeList - _keyFreeList;
-
-          if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
-          {
-            entry.Key = default!;
-          }
-
-          if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
-          {
-            // O(n) removal, unfortunately
-            var endIndex = entry.EndIndex;
-            for (var index = entry.StartIndex; index != endIndex; index = _indexes[index])
-            {
-              _values[index] = default!;
-            }
-
-            _values[endIndex] = default!;
-          }
-
-          // append linked list of values to freelist
-          var count = _indexes[entry.EndIndex];
-          _valueFreeCount += count;
-          _indexes[entry.EndIndex] = _valueFreeList;
-          _valueFreeList = entry.StartIndex;
-
-          entry.EndIndex = -1; // mark entry as incomplete
-
-          _keyFreeList = i;
-          _keyFreeCount++;
-          return true;
+          bucket = entry.Next + 1; // Value in buckets is 1-based
+        }
+        else
+        {
+          entries[last].Next = entry.Next;
         }
 
-        last = i;
-        i = entry.Next;
+        Debug.Assert(
+          StartOfFreeList - _keyFreeList < 0,
+          "shouldn't underflow because max hashtable length is MaxPrimeArrayLength = 0x7FEFFFFD(2146435069) _freelist underflow threshold 2147483646");
+        entry.Next = StartOfFreeList - _keyFreeList;
 
-        collisionCount++;
-        if (collisionCount > (uint)entries.Length)
+        if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
         {
-          // The chain of entries forms a loop; which means a concurrent update has happened.
-          // Break out of the loop and throw, rather than looping forever.
-          ThrowHelper.ThrowInvalidOperationException_ConcurrentOperationsNotSupported();
+          entry.Key = default!;
         }
+
+        if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+        {
+          // O(n) removal, unfortunately
+          var endIndex = entry.EndIndex;
+          for (var index = entry.StartIndex; index != endIndex; index = _indexes[index])
+          {
+            _values[index] = default!;
+          }
+
+          _values[endIndex] = default!;
+        }
+
+        // append linked list of values to freelist
+        var count = _indexes[entry.EndIndex];
+        _valueFreeCount += count;
+        _indexes[entry.EndIndex] = _valueFreeList;
+        _valueFreeList = entry.StartIndex;
+
+        entry.EndIndex = -1; // mark entry as incomplete
+
+        _keyFreeList = i;
+        _keyFreeCount++;
+        return true;
+      }
+
+      last = i;
+      i = entry.Next;
+
+      collisionCount++;
+      if (collisionCount > (uint)entries.Length)
+      {
+        // The chain of entries forms a loop; which means a concurrent update has happened.
+        // Break out of the loop and throw, rather than looping forever.
+        ThrowHelper.ThrowInvalidOperationException_ConcurrentOperationsNotSupported();
       }
     }
 
@@ -258,29 +249,300 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   public void Clear()
   {
-    var count = _keyCount;
-    if (count <= 0) return;
+    var keyCount = _keyCount;
+    if (keyCount <= 0) return; // no keys - no values
 
     Debug.Assert(_buckets != null, "_buckets should be non-null");
     Debug.Assert(_entries != null, "_entries should be non-null");
 
     Array.Clear(_buckets, 0, _buckets.Length);
+    Array.Clear(_entries, index: 0, length: keyCount);
 
     _keyCount = 0;
     _keyFreeList = -1;
     _keyFreeCount = 0;
 
+    var valuesCount = _valuesCount; // may contains gaps
+    if (valuesCount > 0 && MyRuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+    {
+      Array.Clear(_values, 0, valuesCount);
+    }
+
     _valuesCount = 0;
     _valueFreeList = -1;
     _valueFreeCount = 0;
+  }
 
-    Array.Clear(_entries, 0, count);
+  public void TrimExcessKeys()
+  {
+    var newCapacity = HashHelpers.GetPrime(Count);
+    var oldEntries = _entries;
+    var currentCapacity = oldEntries == null ? 0 : oldEntries.Length;
+    if (newCapacity >= currentCapacity)
+      return;
 
-    if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+    var oldCount = _keyCount;
+    _version++;
+    Initialize(newCapacity);
+
+    Debug.Assert(oldEntries is not null);
+
+    CopyEntries(oldEntries, oldCount);
+  }
+
+  public void TrimExcessValues()
+  {
+    var newCapacity = ValuesCount;
+    var currentCapacity = _values.Length;
+    if (newCapacity >= currentCapacity)
+      return;
+
+    _version++;
+
+    if (newCapacity == 0)
     {
-      Array.Clear(_values, 0, _valuesCount);
+      _values = s_emptyValues;
+      _indexes = s_emptyIndexes;
+      // previous empty array may contains gaps, reset all value list counters
+      _valuesCount = 0;
+      _valueFreeCount = 0;
+      _valueFreeList = -1;
+    }
+    else if (_valueFreeCount == 0) // no gaps
+    {
+      var newValues = new TValue[newCapacity];
+      var newIndexes = new int[newCapacity];
+
+      if (_valuesCount > 0)
+      {
+        Array.Copy(_values, newValues, length: _valuesCount);
+        Array.Copy(_indexes, newIndexes, length: _valuesCount);
+      }
+
+      _values = newValues;
+      _indexes = newIndexes;
+    }
+    else // has value gaps
+    {
+      var newValues = new TValue[newCapacity];
+      var newIndexes = new int[newCapacity];
+
+      var entries = _entries!;
+      var oldValues = _values;
+      var oldIndexes = _indexes;
+      var newValuesIndex = 0;
+
+      for (var keyIndex = 0; keyIndex < _keyCount; keyIndex++)
+      {
+        if (entries[keyIndex].Next < -1) continue;
+
+        ref var entry = ref entries[keyIndex];
+
+        var endIndex = entry.EndIndex;
+        var newStartIndex = newValuesIndex;
+
+        for (var index = entry.StartIndex; index != endIndex; index = oldIndexes[index])
+        {
+          newValues[newValuesIndex] = oldValues[index];
+          newIndexes[newValuesIndex] = newValuesIndex + 1;
+          newValuesIndex++;
+        }
+
+        newValues[newValuesIndex] = oldValues[endIndex]; // last value
+        newIndexes[newValuesIndex] = oldIndexes[endIndex]; // copy count
+
+        // update offsets in key entry
+        entry.StartIndex = newStartIndex;
+        entry.EndIndex = newValuesIndex;
+
+        newValuesIndex++;
+      }
+
+      _values = newValues;
+      _indexes = newIndexes;
+      _valuesCount = newValuesIndex;
+      _valueFreeCount = 0;
+      _valueFreeList = -1;
     }
   }
+
+  public ValuesCollection this[TKey key]
+  {
+    get
+    {
+      var entryIndex = FindEntryIndex(key);
+
+      if (entryIndex >= 0)
+      {
+        var entries = _entries!;
+        return new ValuesCollection(this, entries[entryIndex].StartIndex, entries[entryIndex].EndIndex);
+      }
+
+      return new ValuesCollection(this, startIndex: 0, endIndex: -1);
+    }
+  }
+
+  public Enumerator GetEnumerator() => new(this);
+
+  public struct Enumerator
+  {
+    private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+    private readonly int _version;
+    private int _index;
+    private KeyValuePair<TKey, ValuesCollection> _current;
+
+    // ReSharper disable once ConvertToPrimaryConstructor
+    public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
+    {
+      _dictionary = dictionary;
+      _version = dictionary._version;
+      _index = 0;
+      _current = default;
+    }
+
+    public bool MoveNext()
+    {
+      if (_version != _dictionary._version)
+      {
+        ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
+      }
+
+      // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
+      // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
+      while ((uint)_index < (uint)_dictionary._keyCount)
+      {
+        ref var entry = ref _dictionary._entries![_index++];
+
+        if (entry.Next >= -1)
+        {
+          _current = new KeyValuePair<TKey, ValuesCollection>(
+            entry.Key, new ValuesCollection(_dictionary, entry.StartIndex, entry.EndIndex));
+          return true;
+        }
+      }
+
+      _index = _dictionary._keyCount + 1;
+      _current = default;
+      return false;
+    }
+
+    public KeyValuePair<TKey, ValuesCollection> Current => _current;
+  }
+
+  [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
+  [DebuggerDisplay("Count = {Count}")]
+  public readonly struct ValuesCollection
+  {
+    private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+    private readonly int _version;
+    private readonly int _startIndex;
+    private readonly int _endIndex;
+
+    internal ValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
+    {
+      _dictionary = dictionary;
+      _version = dictionary._version;
+      _startIndex = startIndex;
+      _endIndex = endIndex;
+    }
+
+    public int Count => _endIndex < 0 ? 0 : _dictionary._indexes[_endIndex];
+    public bool IsEmpty => _endIndex < 0;
+
+    public Enumerator GetEnumerator()
+    {
+      if (_version != _dictionary._version)
+      {
+        ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
+      }
+
+      return new Enumerator(_dictionary, _startIndex, _endIndex);
+    }
+
+    public struct Enumerator
+    {
+      private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+      private readonly int _version;
+      private readonly int _endIndex;
+      private int _currentIndex;
+      private TValue? _current;
+
+      // ReSharper disable once ConvertToPrimaryConstructor
+      public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
+      {
+        _dictionary = dictionary;
+        _version = dictionary._version;
+        _endIndex = endIndex;
+        _currentIndex = ~startIndex;
+        _current = default;
+      }
+
+      public bool MoveNext()
+      {
+        var dictionary = _dictionary;
+        if (_version == dictionary._version && _currentIndex != _endIndex)
+        {
+          if (_currentIndex < 0)
+          {
+            _currentIndex = ~_currentIndex;
+            _current = dictionary._values[_currentIndex];
+          }
+          else
+          {
+            _currentIndex = dictionary._indexes[_currentIndex];
+            _current = dictionary._values[_currentIndex];
+          }
+
+          return true;
+        }
+
+        return MoveNextRare();
+      }
+
+      private bool MoveNextRare()
+      {
+        if (_version != _dictionary._version)
+        {
+          ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
+        }
+
+        _current = default;
+        return false;
+      }
+
+      public TValue Current => _current!;
+    }
+
+    public TValue[] ToArray()
+    {
+      if (_version != _dictionary._version)
+      {
+        ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
+      }
+
+      var count = _dictionary._indexes[_endIndex];
+      if (count == 0)
+        return Array.Empty<TValue>();
+
+      var array = new TValue[count];
+      var arrayIndex = 0;
+
+      var values = _dictionary._values;
+      var indexes = _dictionary._indexes;
+      var endIndex = _endIndex;
+
+      for (var index = _startIndex; index != endIndex; index = indexes[index])
+      {
+        array[arrayIndex++] = values[index];
+      }
+
+      array[arrayIndex] = values[endIndex];
+
+      return array;
+    }
+  }
+
+  //////////////////////////////////////////////////////////////
 
   private void Initialize(int capacity)
   {
@@ -557,6 +819,75 @@ public class MultiValueDictionarySlim<TKey, TValue>
     return ref buckets[hashCode % (uint)buckets.Length];
   }
 
+  private void CopyEntries(Entry[] oldEntries, int count)
+  {
+    Debug.Assert(_entries is not null);
+
+    var newEntries = _entries;
+    var newCount = 0;
+    for (var index = 0; index < count; index++)
+    {
+      var hashCode = oldEntries[index].HashCode;
+      if (oldEntries[index].Next < -1) continue;
+
+      ref var entry = ref newEntries[newCount];
+      entry = oldEntries[index];
+
+      ref var bucket = ref GetBucket(hashCode);
+      entry.Next = bucket - 1; // Value in _buckets is 1-based
+      bucket = newCount + 1;
+      newCount++;
+    }
+
+    _keyCount = newCount;
+    _keyFreeCount = 0;
+  }
+
+  private void StoreEntryValue(ref Entry entry, TValue value, int extraCapacity = 1)
+  {
+    // allocate a place for value to store
+    int valueIndex;
+    if (_valueFreeCount > 0) // try freelist first
+    {
+      valueIndex = _valueFreeList;
+      Debug.Assert(valueIndex < _values.Length);
+      _valueFreeList = _indexes[valueIndex]; // next freelist index
+      _valueFreeCount--;
+    }
+    else
+    {
+      valueIndex = _valuesCount;
+
+      if (valueIndex == _values.Length) // value list is full
+      {
+        ResizeValues(extraCapacity);
+
+        Debug.Assert(valueIndex < _values.Length);
+        Debug.Assert(valueIndex < _indexes.Length);
+      }
+
+      _valuesCount++;
+    }
+
+    if (entry.EndIndex == -1) // new key added
+    {
+      entry.StartIndex = valueIndex;
+      entry.EndIndex = valueIndex;
+
+      _values[valueIndex] = value;
+      _indexes[valueIndex] = 1; // store count
+    }
+    else // key has values associated
+    {
+      var oldCount = _indexes[entry.EndIndex];
+      _indexes[entry.EndIndex] = valueIndex;
+
+      entry.EndIndex = valueIndex; // append new item
+      _values[valueIndex] = value;
+      _indexes[valueIndex] = oldCount + 1; // new count
+    }
+  }
+
   private void ResizeKeys()
   {
     Debug.Assert(_keyFreeCount == 0); // only resize when freelist is empty
@@ -644,182 +975,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
       _valueFreeList = -1;
 
       Debug.Assert(_valuesCount < _values.Length);
-    }
-  }
-
-  public ValuesCollection this[TKey key]
-  {
-    get
-    {
-      var entryIndex = FindEntryIndex(key);
-
-      if (entryIndex >= 0)
-      {
-        var entries = _entries!;
-        return new ValuesCollection(this, entries[entryIndex].StartIndex, entries[entryIndex].EndIndex);
-      }
-
-      return new ValuesCollection(this, startIndex: 0, endIndex: -1);
-    }
-  }
-
-  public Enumerator GetEnumerator() => new(this);
-
-  public struct Enumerator
-  {
-    private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
-    private readonly int _version;
-    private int _index;
-    private KeyValuePair<TKey, ValuesCollection> _current;
-
-    // ReSharper disable once ConvertToPrimaryConstructor
-    public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
-    {
-      _dictionary = dictionary;
-      _version = dictionary._version;
-      _index = 0;
-      _current = default;
-    }
-
-    public bool MoveNext()
-    {
-      if (_version != _dictionary._version)
-      {
-        ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
-      }
-
-      // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
-      // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
-      while ((uint)_index < (uint)_dictionary._keyCount)
-      {
-        ref var entry = ref _dictionary._entries![_index++];
-
-        if (entry.Next >= -1)
-        {
-          _current = new KeyValuePair<TKey, ValuesCollection>(
-            entry.Key, new ValuesCollection(_dictionary, entry.StartIndex, entry.EndIndex));
-          return true;
-        }
-      }
-
-      _index = _dictionary._keyCount + 1;
-      _current = default;
-      return false;
-    }
-
-    public KeyValuePair<TKey, ValuesCollection> Current => _current;
-  }
-
-  [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
-  [DebuggerDisplay("Count = {Count}")]
-  public readonly struct ValuesCollection
-  {
-    private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
-    private readonly int _version;
-    private readonly int _startIndex;
-    private readonly int _endIndex;
-
-    internal ValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
-    {
-      _dictionary = dictionary;
-      _version = dictionary._version;
-      _startIndex = startIndex;
-      _endIndex = endIndex;
-    }
-
-    public int Count => _endIndex < 0 ? 0 : _dictionary._indexes[_endIndex];
-    public bool IsEmpty => _endIndex < 0;
-
-    public Enumerator GetEnumerator()
-    {
-      if (_version != _dictionary._version)
-      {
-        ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
-      }
-
-      return new Enumerator(_dictionary, _startIndex, _endIndex);
-    }
-
-    public struct Enumerator
-    {
-      private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
-      private readonly int _version;
-      private readonly int _endIndex;
-      private int _currentIndex;
-      private TValue? _current;
-
-      // ReSharper disable once ConvertToPrimaryConstructor
-      public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
-      {
-        _dictionary = dictionary;
-        _version = dictionary._version;
-        _endIndex = endIndex;
-        _currentIndex = ~startIndex;
-        _current = default;
-      }
-
-      public bool MoveNext()
-      {
-        var dictionary = _dictionary;
-        if (_version == dictionary._version && _currentIndex != _endIndex)
-        {
-          if (_currentIndex < 0)
-          {
-            _currentIndex = ~_currentIndex;
-            _current = dictionary._values[_currentIndex];
-          }
-          else
-          {
-            _currentIndex = dictionary._indexes[_currentIndex];
-            _current = dictionary._values[_currentIndex];
-          }
-
-          return true;
-        }
-
-        return MoveNextRare();
-      }
-
-      private bool MoveNextRare()
-      {
-        if (_version != _dictionary._version)
-        {
-          ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
-        }
-
-        _current = default;
-        return false;
-      }
-
-      public TValue Current => _current!;
-    }
-
-    public TValue[] ToArray()
-    {
-      if (_version != _dictionary._version)
-      {
-        ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
-      }
-
-      var count = _dictionary._indexes[_endIndex];
-      if (count == 0)
-        return Array.Empty<TValue>();
-
-      var array = new TValue[count];
-      var arrayIndex = 0;
-
-      var values = _dictionary._values;
-      var indexes = _dictionary._indexes;
-      var endIndex = _endIndex;
-
-      for (var index = _startIndex; index != endIndex; index = indexes[index])
-      {
-        array[arrayIndex++] = values[index];
-      }
-
-      array[arrayIndex] = values[endIndex];
-
-      return array;
     }
   }
 

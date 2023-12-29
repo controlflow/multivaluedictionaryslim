@@ -23,9 +23,7 @@ namespace System.Collections.Generic
       return GetPrime(newSize);
     }
 
-    public static ulong HashCollisionThreshold => 0;
-
-    public static bool IsPrime(int candidate)
+    private static bool IsPrime(int candidate)
     {
       if ((candidate & 1) != 0)
       {
@@ -70,6 +68,7 @@ namespace System.Collections.Generic
         if (IsPrime(i) && ((i - 1) % HashPrime != 0))
           return i;
       }
+
       return min;
     }
   }

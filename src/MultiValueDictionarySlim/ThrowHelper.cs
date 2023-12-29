@@ -11,10 +11,9 @@ namespace System.Collections.Generic
     }
 
     [DoesNotReturn]
-
     public static void ThrowArgumentNullException(string parameterName)
     {
-      throw new ArgumentNullException();
+      throw new ArgumentNullException(parameterName);
     }
 
     [DoesNotReturn]
@@ -22,7 +21,6 @@ namespace System.Collections.Generic
     {
       throw new ArgumentException();
     }
-
 
     [DoesNotReturn]
     public static void ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion()
