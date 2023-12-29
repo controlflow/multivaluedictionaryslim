@@ -9,6 +9,7 @@ public class MultiValueDictionaryNaive<TKey, TValue> : IEnumerable<KeyValuePair<
 
   public int Count => _dictionary.Count;
   public int ValuesCount => _dictionary.Values.Sum(x => x.Count);
+  public int ValueCapacity => _dictionary.Values.Sum(x => x.Capacity);
 
   public Dictionary<TKey, List<TValue>>.KeyCollection Keys => _dictionary.Keys;
 
@@ -42,7 +43,7 @@ public class MultiValueDictionaryNaive<TKey, TValue> : IEnumerable<KeyValuePair<
 
   IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-  public List<TValue> this[TKey key]
+  public IReadOnlyList<TValue> this[TKey key]
   {
     get
     {
@@ -51,7 +52,57 @@ public class MultiValueDictionaryNaive<TKey, TValue> : IEnumerable<KeyValuePair<
         return list;
       }
 
-      return new List<TValue>();
+      return Array.Empty<TValue>();
+    }
+  }
+
+  public void AddValueRange(TKey key, IEnumerable<TValue> values)
+  {
+    if (values is ICollection<TValue> collection)
+    {
+      if (collection.Count > 0)
+      {
+        if (!_dictionary.TryGetValue(key, out var list))
+        {
+          _dictionary[key] = list = new List<TValue>();
+        }
+
+        list.AddRange(collection);
+      }
+    }
+    else
+    {
+      using var enumerator = values.GetEnumerator();
+
+      if (enumerator.MoveNext())
+      {
+        if (!_dictionary.TryGetValue(key, out var list))
+        {
+          _dictionary[key] = list = new List<TValue>();
+        }
+
+        list.Add(enumerator.Current);
+
+        while (enumerator.MoveNext())
+        {
+          list.Add(enumerator.Current);
+        }
+      }
+    }
+  }
+
+  public void TrimExcessKeys()
+  {
+    #if NETCOREAPP
+    _dictionary.TrimExcess();
+    #endif
+  }
+
+  public void TrimExcessValues()
+  {
+    foreach (var list in _dictionary.Values)
+    {
+      list.TrimExcess();
     }
   }
 }

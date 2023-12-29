@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -126,34 +127,95 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   public void AddValueRange(TKey key, IEnumerable<TValue> values)
   {
-    var entryIndex = GetOrCreateEntry(key);
-
-    ref var entry = ref _entries![entryIndex];
-
     // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
     if (values == null) ThrowHelper.ThrowArgumentNullException(nameof(values));
 
-#if NETCOREAPP
-    if (values.TryGetNonEnumeratedCount(out var count))
-#else
-    if (values is System.Collections.ICollection { Count: var count })
-#endif
+    if (values is ICollection collection)
     {
-      foreach (var value in values)
+      var collectionCount = collection.Count;
+      if (collectionCount > 0)
       {
-        StoreEntryValue(ref entry, value, extraCapacity: count);
-        count--;
+        var entryIndex = GetOrCreateEntry(key);
+        ref var entry = ref _entries![entryIndex];
+
+        if (_valuesCount + collectionCount <= _values.Length) // has tail space
+        {
+          CopyValuesToValuesListTail(ref entry, collection, collectionCount);
+        }
+        // fill the gaps
+        else if (_valuesCount - _valueFreeCount + collectionCount < _values.Length)
+        {
+          using var enumerator = values.GetEnumerator(); // alloc :(
+
+          while (enumerator.MoveNext())
+          {
+            StoreEntryValue(ref entry, enumerator.Current);
+          }
+        }
+        // resize and copy to the tail
+        else
+        {
+          ResizeValues(extraCapacity: collectionCount);
+
+          Debug.Assert(_valuesCount + collectionCount <= _values.Length);
+
+          CopyValuesToValuesListTail(ref entry, collection, collectionCount);
+        }
       }
     }
     else
     {
-      foreach (var value in values)
+      using var enumerator = values.GetEnumerator();
+
+      if (enumerator.MoveNext())
       {
-        StoreEntryValue(ref entry, value, extraCapacity: 1);
+        var entryIndex = GetOrCreateEntry(key);
+        ref var entry = ref _entries![entryIndex];
+
+        StoreEntryValue(ref entry, enumerator.Current);
+
+        while (enumerator.MoveNext())
+        {
+          StoreEntryValue(ref entry, enumerator.Current);
+        }
       }
     }
 
     _version++;
+    return;
+
+    void CopyValuesToValuesListTail(ref Entry entry, ICollection list, int listCount)
+    {
+      Debug.Assert(listCount > 0);
+
+      list.CopyTo(_values, index: _valuesCount);
+
+      var endIndex = _valuesCount + listCount - 1;
+      var indexes = _indexes;
+      int countBefore;
+
+      if (entry.EndIndex < 0) // empty entry
+      {
+        countBefore = 0;
+        entry.StartIndex = _valuesCount;
+        entry.EndIndex = endIndex;
+      }
+      else
+      {
+        countBefore = indexes[entry.EndIndex];
+        indexes[entry.EndIndex] = _valuesCount; // link from last value to head of the copied list
+        entry.EndIndex = endIndex;
+      }
+
+      for (var index = _valuesCount; index < endIndex; index++)
+      {
+        indexes[index] = index + 1;
+      }
+
+      indexes[endIndex] = countBefore + listCount;
+
+      _valuesCount += listCount;
+    }
   }
 
   public bool Remove(TKey key)
@@ -520,6 +582,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
         ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
       }
 
+      if (_endIndex < 0)
+        return Array.Empty<TValue>();
+
       var count = _dictionary._indexes[_endIndex];
       if (count == 0)
         return Array.Empty<TValue>();
@@ -843,7 +908,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     _keyFreeCount = 0;
   }
 
-  private void StoreEntryValue(ref Entry entry, TValue value, int extraCapacity = 1)
+  private void StoreEntryValue(ref Entry entry, TValue value)
   {
     // allocate a place for value to store
     int valueIndex;
@@ -851,6 +916,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     {
       valueIndex = _valueFreeList;
       Debug.Assert(valueIndex < _values.Length);
+
       _valueFreeList = _indexes[valueIndex]; // next freelist index
       _valueFreeCount--;
     }
@@ -860,7 +926,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       if (valueIndex == _values.Length) // value list is full
       {
-        ResizeValues(extraCapacity);
+        ResizeValues();
 
         Debug.Assert(valueIndex < _values.Length);
         Debug.Assert(valueIndex < _indexes.Length);
@@ -922,6 +988,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   private void ResizeValues(int extraCapacity = 1)
   {
+    Debug.Assert(extraCapacity >= 1);
     Debug.Assert(_valuesCount <= _values.Length);
 
     if (_values.Length == 0)
