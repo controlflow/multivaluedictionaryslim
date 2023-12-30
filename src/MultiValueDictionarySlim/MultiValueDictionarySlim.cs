@@ -3,19 +3,13 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using System.Runtime.CompilerServices;
 
 // ReSharper disable IntroduceOptionalParameters.Global
-// ReSharper disable UseArrayEmptyMethod
 // ReSharper disable MemberHidesStaticFromOuterClass
 // ReSharper disable MergeConditionalExpression
 
 namespace ControlFlow.Collections;
-
-// todo: AddValueRange
-// todo: all keys collection
-// todo: all values collection
 
 [DebuggerTypeProxy(typeof(MultiValueDictionarySlimDebugView<,>))]
 [DebuggerDisplay("Count = {Count}")]
@@ -41,8 +35,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
   private const int StartOfFreeList = -3;
   private const int DefaultValuesListSize = 4;
 
-  private static readonly TValue[] s_emptyValues = new TValue[0];
-  private static readonly int[] s_emptyIndexes = new int[0];
+  private static readonly TValue[] s_emptyValues = Array.Empty<TValue>();
+  private static readonly int[] s_emptyIndexes = Array.Empty<int>();
 
   private struct Entry
   {
@@ -115,6 +109,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
   public int ValuesCapacity => _values.Length;
 
   public IEqualityComparer<TKey> Comparer => _comparer ?? EqualityComparer<TKey>.Default;
+
+  public KeyCollection Keys => new(this);
+  public AllValuesCollection Values => new(this);
 
   public void Add(TKey key, TValue value)
   {
@@ -453,8 +450,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
     private int _index;
     private KeyValuePair<TKey, ValuesCollection> _current;
 
-    // ReSharper disable once ConvertToPrimaryConstructor
-    public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
+    [Obsolete("Do not use", error: true)]
+#pragma warning disable CS8618
+    public Enumerator() { }
+#pragma warning restore CS8618
+
+    internal Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
     {
       _dictionary = dictionary;
       _version = dictionary._version;
@@ -500,6 +501,11 @@ public class MultiValueDictionarySlim<TKey, TValue>
     private readonly int _startIndex;
     private readonly int _endIndex;
 
+    [Obsolete("Do not use", error: true)]
+#pragma warning disable CS8618
+    public ValuesCollection() { }
+#pragma warning restore CS8618
+
     internal ValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
     {
       _dictionary = dictionary;
@@ -521,6 +527,15 @@ public class MultiValueDictionarySlim<TKey, TValue>
       return new Enumerator(_dictionary, _startIndex, _endIndex);
     }
 
+    public IEnumerable<TValue> ToEnumerator()
+    {
+      var enumerator = GetEnumerator();
+      while (enumerator.MoveNext())
+      {
+        yield return enumerator.Current;
+      }
+    }
+
     public struct Enumerator
     {
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
@@ -529,8 +544,12 @@ public class MultiValueDictionarySlim<TKey, TValue>
       private int _currentIndex;
       private TValue? _current;
 
-      // ReSharper disable once ConvertToPrimaryConstructor
-      public Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
+      [Obsolete("Do not use", error: true)]
+#pragma warning disable CS8618
+      public Enumerator() { }
+#pragma warning restore CS8618
+
+      internal Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
       {
         _dictionary = dictionary;
         _version = dictionary._version;
@@ -602,6 +621,232 @@ public class MultiValueDictionarySlim<TKey, TValue>
       }
 
       array[arrayIndex] = values[endIndex];
+
+      return array;
+    }
+  }
+
+  public readonly struct KeyCollection
+  {
+    private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+
+    internal KeyCollection(MultiValueDictionarySlim<TKey, TValue> dictionary)
+    {
+      _dictionary = dictionary;
+    }
+
+    public int Count => _dictionary.Count;
+
+    public Enumerator GetEnumerator() => new(_dictionary);
+
+    public IEnumerable<TKey> ToEnumerator()
+    {
+      var enumerator = GetEnumerator();
+      while (enumerator.MoveNext())
+      {
+        yield return enumerator.Current;
+      }
+    }
+
+    public struct Enumerator
+    {
+      private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+      private readonly int _version;
+      private int _index;
+      private TKey? _current;
+
+      [Obsolete("Do not use", error: true)]
+#pragma warning disable CS8618
+      public Enumerator() { }
+#pragma warning restore CS8618
+
+      internal Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
+      {
+        _dictionary = dictionary;
+        _version = dictionary._version;
+        _index = 0;
+        _current = default;
+      }
+
+      public bool MoveNext()
+      {
+        if (_version != _dictionary._version)
+        {
+          ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
+        }
+
+        // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
+        // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
+        while ((uint)_index < (uint)_dictionary._keyCount)
+        {
+          ref var entry = ref _dictionary._entries![_index++];
+
+          if (entry.Next >= -1)
+          {
+            _current = entry.Key;
+            return true;
+          }
+        }
+
+        _index = _dictionary._keyCount + 1;
+        _current = default;
+        return false;
+      }
+
+      public TKey Current => _current!;
+    }
+
+    public TKey[] ToArray()
+    {
+      var keyCount = _dictionary.Count;
+      if (keyCount == 0)
+        return Array.Empty<TKey>();
+
+      var array = new TKey[keyCount];
+      var arrayIndex = 0;
+      var entries = _dictionary._entries!;
+      var keyEntriesCount = _dictionary._keyCount;
+
+      // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
+      // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
+      for (var index = 0; (uint)index < (uint)keyEntriesCount; index++)
+      {
+        ref var entry = ref entries[index];
+        if (entry.Next < -1) continue;
+
+        array[arrayIndex++] = entry.Key;
+      }
+
+      return array;
+    }
+  }
+
+  public readonly struct AllValuesCollection
+  {
+    private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+
+    internal AllValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary)
+    {
+      _dictionary = dictionary;
+    }
+
+    public int Count => _dictionary.ValuesCount;
+
+    public Enumerator GetEnumerator() => new(_dictionary);
+
+    public IEnumerable<TValue> ToEnumerator()
+    {
+      var enumerator = GetEnumerator();
+      while (enumerator.MoveNext())
+      {
+        yield return enumerator.Current;
+      }
+    }
+
+    public struct Enumerator
+    {
+      private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+      private readonly int _version;
+      private int _keyIndex;
+      private int _valueEndIndex;
+      private int _valueCurrentIndex;
+      private TValue? _current;
+
+      [Obsolete("Do not use", error: true)]
+#pragma warning disable CS8618
+      public Enumerator() { }
+#pragma warning restore CS8618
+
+      internal Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
+      {
+        _dictionary = dictionary;
+        _version = dictionary._version;
+        _current = default;
+        // end and current are equal
+      }
+
+      public bool MoveNext()
+      {
+        var dictionary = _dictionary;
+        if (_version == dictionary._version && _valueCurrentIndex != _valueEndIndex)
+        {
+          if (_valueCurrentIndex < 0) // before start
+          {
+            _valueCurrentIndex = ~_valueCurrentIndex;
+            _current = dictionary._values[_valueCurrentIndex];
+          }
+          else
+          {
+            _valueCurrentIndex = dictionary._indexes[_valueCurrentIndex];
+            _current = dictionary._values[_valueCurrentIndex];
+          }
+
+          return true;
+        }
+
+        return MoveNextRare();
+      }
+
+      private bool MoveNextRare()
+      {
+        if (_version != _dictionary._version)
+        {
+          ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
+        }
+
+        // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
+        // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
+        while ((uint)_keyIndex < (uint)_dictionary._keyCount)
+        {
+          ref var entry = ref _dictionary._entries![_keyIndex++];
+
+          if (entry.Next >= -1)
+          {
+            _valueEndIndex = entry.EndIndex;
+            _valueCurrentIndex = entry.StartIndex;
+            _current = _dictionary._values[entry.StartIndex];
+            return true;
+          }
+        }
+
+        _keyIndex = _dictionary._keyCount + 1;
+        _current = default;
+        return false;
+      }
+
+      public TValue Current => _current!;
+    }
+
+    public TValue[] ToArray()
+    {
+      var valuesCount = _dictionary.ValuesCount;
+      if (valuesCount == 0)
+        return Array.Empty<TValue>();
+
+      var array = new TValue[valuesCount];
+      var arrayIndex = 0;
+
+      var entries = _dictionary._entries!;
+      var values = _dictionary._values;
+      var indexes = _dictionary._indexes;
+      var keyEntriesCount = _dictionary._keyCount;
+
+      // Use unsigned comparison since we set index to dictionary.count+1 when the enumeration ends.
+      // dictionary.count+1 could be negative if dictionary.count is int.MaxValue
+      for (var keyIndex = 0; (uint)keyIndex < (uint)keyEntriesCount; keyIndex++)
+      {
+        ref var entry = ref entries[keyIndex];
+        if (entry.Next < -1) continue;
+
+        var endIndex = entry.EndIndex;
+
+        for (var index = entry.StartIndex; index != endIndex; index = indexes[index])
+        {
+          array[arrayIndex++] = values[index];
+        }
+
+        array[arrayIndex++] = values[endIndex];
+      }
 
       return array;
     }

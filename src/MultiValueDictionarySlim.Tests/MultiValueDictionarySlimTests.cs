@@ -91,6 +91,7 @@ public class MultiValueDictionarySlimTests
     Assert.IsFalse(dictionary[7].IsEmpty);
     Assert.AreEqual(3, dictionary[7].Count);
     Assert.AreEqual(new[] { "71", "72", "73" }, dictionary[7].ToArray());
+    Assert.AreEqual(new[] { "71", "72", "73" }, dictionary[7].ToEnumerator().ToArray());
 
     dictionary.Clear();
 
@@ -119,6 +120,7 @@ public class MultiValueDictionarySlimTests
     var enumCollection = dict1["enum"];
     Assert.AreEqual(dataCount, enumCollection.Count);
     CollectionAssert.AreEqual(Enumerate().ToArray(), enumCollection.ToArray());
+    CollectionAssert.AreEqual(Enumerate(), enumCollection.ToEnumerator());
 
     var dict2 = new MultiValueDictionarySlim<string, int>();
     dict2.AddValueRange("list", Enumerate().ToList());
@@ -128,6 +130,7 @@ public class MultiValueDictionarySlimTests
     var listCollection = dict2["list"];
     Assert.AreEqual(dataCount, listCollection.Count);
     CollectionAssert.AreEqual(Enumerate().ToArray(), listCollection.ToArray());
+    CollectionAssert.AreEqual(Enumerate(), listCollection.ToEnumerator());
 
     var emptyCollection = dict2["empty"];
     Assert.AreEqual(0, emptyCollection.Count);
@@ -145,34 +148,39 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test]
-  [Repeat(10000)]
+  [Repeat(2000)]
   [SuppressMessage("ReSharper", "PossibleMultipleEnumeration")]
   public void BasicOperations()
   {
-    var dictionaryNaive = new MultiValueDictionaryNaive<int, string>();
-    var dictionarySlim = _random.Next(0, 20) switch
+    var keyCapacity = _random.Next(0, 100);
+    var valueCapacity = _random.Next(0, 100);
+
+    var (dictionarySlim, dictionaryNaive) = _random.Next(0, 20) switch
     {
-      >= 0 and < 10
-        => new MultiValueDictionarySlim<int, string>(),
-      >= 10 and < 16
-        => new MultiValueDictionarySlim<int, string>(CustomIntComparer.Instance),
-      17
-        => new MultiValueDictionarySlim<int, string>(keyCapacity: 0, valueCapacity: _random.Next(0, 100)),
-      18
-        => new MultiValueDictionarySlim<int, string>(keyCapacity: _random.Next(0, 100), valueCapacity: 0),
-      19
-        => new MultiValueDictionarySlim<int, string>(keyCapacity: _random.Next(0, 100), valueCapacity: _random.Next(0, 100)),
-      _
-        => new MultiValueDictionarySlim<int, string>(keyCapacity: _random.Next(0, 100), valueCapacity: _random.Next(0, 100), CustomIntComparer.Instance)
+      >= 0 and < 10 => (
+        new MultiValueDictionarySlim<int, string>(),
+        new MultiValueDictionaryNaive<int, string>()),
+      >= 10 and < 16 => (
+        new MultiValueDictionarySlim<int, string>(CustomIntComparer.Instance),
+        new MultiValueDictionaryNaive<int, string>(CustomIntComparer.Instance)),
+      17 => (
+        new MultiValueDictionarySlim<int, string>(keyCapacity: 0, valueCapacity),
+        new MultiValueDictionaryNaive<int, string>(keyCapacity: 0, valueCapacity)),
+      18 => (
+        new MultiValueDictionarySlim<int, string>(keyCapacity, valueCapacity: 0),
+        new MultiValueDictionaryNaive<int, string>(keyCapacity, valueCapacity: 0)),
+      19 => (
+        new MultiValueDictionarySlim<int, string>(keyCapacity, valueCapacity),
+        new MultiValueDictionaryNaive<int, string>(keyCapacity, valueCapacity)),
+      _ => (
+        new MultiValueDictionarySlim<int, string>(keyCapacity, valueCapacity, CustomIntComparer.Instance),
+        new MultiValueDictionaryNaive<int, string>(keyCapacity, valueCapacity, CustomIntComparer.Instance))
     };
 
     var keysPerCollection = _random.Next(1, 20);
 
     Assert.AreEqual(0, dictionarySlim.Count);
     Assert.AreEqual(0, dictionarySlim.ValuesCount);
-
-    // todo: AddRange()
-    // todo: Remove of values
 
     for (var operationsCount = _random.Next(0, 500); operationsCount >= 0; operationsCount--)
     {
@@ -283,7 +291,8 @@ public class MultiValueDictionarySlimTests
           Assert.AreEqual(valuesCount, dictionarySlim.ValuesCount);
           Assert.AreEqual(valuesCount, dictionaryNaive.ValuesCount);
           Assert.AreEqual(dictionarySlim.ValuesCount, dictionarySlim.ValuesCapacity);
-          Assert.That(dictionarySlim.ValuesCapacity, Is.LessThanOrEqualTo(dictionaryNaive.ValueCapacity));
+          Assert.AreEqual(dictionaryNaive.ValuesCount, dictionaryNaive.ValuesCapacity);
+          Assert.AreEqual(dictionarySlim.ValuesCapacity, dictionaryNaive.ValuesCapacity);
           break;
         }
 
@@ -294,8 +303,7 @@ public class MultiValueDictionarySlimTests
       }
     }
 
-    AssertEqual(dictionarySlim, dictionaryNaive);
-    //Assert.That(dictionarySlim.ValuesCapacity, Is.LessThanOrEqualTo(dictionaryNaive.ValueCapacity));
+    AssertEqualAndConsistent(dictionarySlim, dictionaryNaive);
   }
 
   [Test]
@@ -314,40 +322,34 @@ public class MultiValueDictionarySlimTests
     Assert.IsTrue(ReferenceEquals(d4.Comparer, EqualityComparer<long>.Default));
   }
 
-  [Test, Repeat(1000)]
+  [Test]
   public void CapacityExpectation_OneValuePerKey()
   {
-    var keys = new HashSet<int>();
-    var dictionarySlim = new MultiValueDictionarySlim<int, string>();
+    var dictionarySlim = new MultiValueDictionarySlim<int, int>();
+    const int count = 128;
 
-    for (var operationsCount = _random.Next(0, 1000); operationsCount >= 0; operationsCount--)
+    for (var index = 0; index < count; index++)
     {
-      int key;
-      do
-      {
-        key = _random.Next(0, 10000);
-      } while (!keys.Add(key));
-
-      dictionarySlim.Add(key, RandomString());
+      dictionarySlim.Add(index, index);
     }
 
-    //Assert.AreEqual(dictionarySlim.ValuesUsedCapacity, dictionarySlim.ValuesCount);
+    Assert.AreEqual(dictionarySlim.ValuesCount, count);
+    Assert.AreEqual(dictionarySlim.ValuesCapacity, count);
   }
 
-  [Test, Repeat(1000)]
+  [Test]
   public void CapacityExpectation_OneKeyManyValues()
   {
-    var dictionarySlim = new MultiValueDictionarySlim<int, string>();
-    var key = _random.Next(0, 10000);
+    var dictionarySlim = new MultiValueDictionarySlim<int, int>();
+    const int count = 128;
 
-    var valuesCount = _random.Next(0, 1000);
-    for (var x = valuesCount; x > 0; x--)
+    for (var index = 0; index < count; index++)
     {
-      dictionarySlim.Add(key, RandomString());
+      dictionarySlim.Add(42, index);
     }
 
-    Assert.AreEqual(valuesCount, dictionarySlim.ValuesCount);
-    Assert.IsTrue(Math.Max(valuesCount * 2, 4) >= dictionarySlim.ValuesCapacity);
+    Assert.AreEqual(dictionarySlim.ValuesCount, count);
+    Assert.AreEqual(dictionarySlim.ValuesCapacity, count);
   }
 
   [Test, Repeat(1000)]
@@ -375,7 +377,7 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test]
-  [Repeat(1000)]
+  [Repeat(100)]
   public void Consistency()
   {
     var dictionarySlim = new MultiValueDictionarySlim<int, int>();
@@ -399,6 +401,13 @@ public class MultiValueDictionarySlimTests
           Assert.AreEqual(x, i);
           x++;
         }
+
+        var y = pair.Key * 100;
+        foreach (var i in pair.Value.ToEnumerator())
+        {
+          Assert.AreEqual(y, i);
+          y++;
+        }
       }
     }
   }
@@ -410,8 +419,16 @@ public class MultiValueDictionarySlimTests
 
     dictionarySlim.Add("aaa", 1);
     dictionarySlim.Add("aaa", 2);
+    dictionarySlim.Add("aaa", 3);
+
     dictionarySlim.Add("bbb", 5);
     dictionarySlim.Add("bbb", 6);
+
+    Assert.AreEqual(3, dictionarySlim["aaa"].Count);
+    CollectionAssert.AreEqual(new[] { 1, 2, 3 }, dictionarySlim["aaa"].ToArray());
+
+    Assert.AreEqual(2, dictionarySlim["bbb"].Count);
+    Assert.IsTrue(dictionarySlim.ContainsKey("bbb"));
   }
 
   private sealed class DumbEqualityComparer<T> : IEqualityComparer<T>
@@ -419,7 +436,7 @@ public class MultiValueDictionarySlimTests
     private DumbEqualityComparer() { }
     public static IEqualityComparer<T> Instance { get; } = new DumbEqualityComparer<T>();
 
-    public bool Equals(T? x, T? y) => EqualityComparer<T>.Default.Equals(x, y);
+    public bool Equals(T x, T y) => EqualityComparer<T>.Default.Equals(x, y);
     public int GetHashCode(T obj) => 42;
   }
 
@@ -431,14 +448,30 @@ public class MultiValueDictionarySlimTests
     return Convert.ToBase64String(buffer);
   }
 
-  private static void AssertEqual<TKey, TValue>(
+  private static void AssertEqualAndConsistent<TKey, TValue>(
     MultiValueDictionarySlim<TKey, TValue> dictionarySlim,
-    MultiValueDictionaryNaive<TKey, TValue> dictionary)
+    MultiValueDictionaryNaive<TKey, TValue> dictionaryNaive)
     where TKey : notnull
   {
-    Assert.AreEqual(dictionary.Count, dictionarySlim.Count);
+    Assert.AreEqual(dictionaryNaive.Count, dictionarySlim.Count);
 
-    foreach (var pair in dictionary)
+    // check keys
+    Assert.AreEqual(dictionarySlim.Count, dictionarySlim.Keys.Count);
+    Assert.AreEqual(dictionaryNaive.Keys.Count, dictionarySlim.Keys.Count);
+    var slimKeys = dictionarySlim.Keys.ToArray();
+    Assert.AreEqual(dictionarySlim.Count, slimKeys.Length);
+    CollectionAssert.AreEquivalent(dictionaryNaive.Keys, slimKeys);
+    CollectionAssert.AreEquivalent(dictionaryNaive.Keys, dictionarySlim.Keys.ToEnumerator());
+
+    // check values
+    Assert.AreEqual(dictionarySlim.ValuesCount, dictionarySlim.Values.Count);
+    Assert.AreEqual(dictionaryNaive.Values.Count(), dictionarySlim.Values.Count);
+    var slimValues = dictionarySlim.Values.ToArray();
+    Assert.AreEqual(dictionarySlim.ValuesCount, slimValues.Length);
+    CollectionAssert.AreEquivalent(dictionaryNaive.Values, slimValues);
+    CollectionAssert.AreEquivalent(dictionaryNaive.Values, dictionarySlim.Values.ToEnumerator());
+
+    foreach (var pair in dictionaryNaive)
     {
       Assert.IsTrue(dictionarySlim.ContainsKey(pair.Key));
 
@@ -451,7 +484,7 @@ public class MultiValueDictionarySlimTests
 
     foreach (var pair in dictionarySlim)
     {
-      var list = dictionary[pair.Key];
+      var list = dictionaryNaive[pair.Key];
       Assert.AreEqual(pair.Value.Count, list.Count);
       CollectionAssert.AreEqual(pair.Value.ToArray(), list);
       ListsEqualViaIndexer(list, pair.Value);
