@@ -527,7 +527,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       return new Enumerator(_dictionary, _startIndex, _endIndex);
     }
 
-    public IEnumerable<TValue> ToEnumerator()
+    public IEnumerable<TValue> ToEnumerable()
     {
       var enumerator = GetEnumerator();
       while (enumerator.MoveNext())
@@ -639,7 +639,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public Enumerator GetEnumerator() => new(_dictionary);
 
-    public IEnumerable<TKey> ToEnumerator()
+    public IEnumerable<TKey> ToEnumerable()
     {
       var enumerator = GetEnumerator();
       while (enumerator.MoveNext())
@@ -734,7 +734,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public Enumerator GetEnumerator() => new(_dictionary);
 
-    public IEnumerable<TValue> ToEnumerator()
+    public IEnumerable<TValue> ToEnumerable()
     {
       var enumerator = GetEnumerator();
       while (enumerator.MoveNext())

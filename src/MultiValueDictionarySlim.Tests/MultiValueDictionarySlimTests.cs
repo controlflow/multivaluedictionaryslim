@@ -91,7 +91,7 @@ public class MultiValueDictionarySlimTests
     Assert.IsFalse(dictionary[7].IsEmpty);
     Assert.AreEqual(3, dictionary[7].Count);
     Assert.AreEqual(new[] { "71", "72", "73" }, dictionary[7].ToArray());
-    Assert.AreEqual(new[] { "71", "72", "73" }, dictionary[7].ToEnumerator().ToArray());
+    Assert.AreEqual(new[] { "71", "72", "73" }, dictionary[7].ToEnumerable().ToArray());
 
     dictionary.Clear();
 
@@ -108,6 +108,63 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test]
+  public void Exceptions()
+  {
+    Assert.Throws<ArgumentOutOfRangeException>(() => _ = new MultiValueDictionarySlim<int, int>(valueCapacity: -1, keyCapacity: 0));
+    Assert.Throws<ArgumentOutOfRangeException>(() => _ = new MultiValueDictionarySlim<int, int>(valueCapacity: 0, keyCapacity: -1));
+    Assert.Throws<ArgumentOutOfRangeException>(() => _ = new MultiValueDictionarySlim<int, int>(valueCapacity: -1, keyCapacity: 0, comparer: null));
+    Assert.Throws<ArgumentOutOfRangeException>(() => _ = new MultiValueDictionarySlim<int, int>(valueCapacity: 0, keyCapacity: -1, comparer: null));
+
+    var dictionarySlim = new MultiValueDictionarySlim<string, int>();
+    Assert.Throws<ArgumentNullException>(() => dictionarySlim.Add(null!, 1));
+    Assert.Throws<ArgumentNullException>(() => dictionarySlim.AddValueRange(null!, new[] { 1 }));
+    Assert.Throws<ArgumentNullException>(() => dictionarySlim.AddValueRange("aaa", values: null!));
+  }
+
+  [Test]
+  public void VersionCheck()
+  {
+    var dictionarySlim = new MultiValueDictionarySlim<string, int>();
+
+    var kvpEnumerator = dictionarySlim.GetEnumerator();
+    dictionarySlim.Add("aaa1", 1);
+    Assert.Throws<InvalidOperationException>(() => kvpEnumerator.MoveNext());
+
+    var kvpEnumerator2 = dictionarySlim.GetEnumerator();
+    Assert.IsTrue(kvpEnumerator2.MoveNext());
+    dictionarySlim.Add("aaa2", 2);
+    Assert.Throws<InvalidOperationException>(() => kvpEnumerator2.MoveNext());
+
+    var keyEnumerator = dictionarySlim.Keys.GetEnumerator();
+    dictionarySlim.Add("bbb1", 1);
+    Assert.Throws<InvalidOperationException>(() => keyEnumerator.MoveNext());
+
+    var keyEnumerator2 = dictionarySlim.Keys.GetEnumerator();
+    Assert.IsTrue(keyEnumerator2.MoveNext());
+    dictionarySlim.Add("bbb2", 2);
+    Assert.Throws<InvalidOperationException>(() => keyEnumerator2.MoveNext());
+
+    using var keyEnumerator3 = dictionarySlim.Keys.ToEnumerable().GetEnumerator();
+    dictionarySlim.Add("bbb3", 3);
+    Assert.Throws<InvalidOperationException>(() => keyEnumerator3.MoveNext());
+
+    // note: only captures version on .GetEnumerator() call, this is just a wrapper
+    var keyEnumerable = dictionarySlim.Keys.ToEnumerable();
+
+    // ReSharper disable once PossibleMultipleEnumeration
+    using var keyEnumerator4 = keyEnumerable.GetEnumerator();
+    Assert.IsTrue(keyEnumerator4.MoveNext());
+    dictionarySlim.Add("bbb4", 4);
+    Assert.Throws<InvalidOperationException>(() => keyEnumerator4.MoveNext());
+
+    // ReSharper disable once PossibleMultipleEnumeration
+    using var keyEnumerator5 = keyEnumerable.GetEnumerator();
+    Assert.IsTrue(keyEnumerator5.MoveNext());
+    dictionarySlim.Add("bbb5", 5);
+    Assert.Throws<InvalidOperationException>(() => keyEnumerator5.MoveNext());
+  }
+
+  [Test]
   public void AddValuesRange()
   {
     const int dataCount = 17;
@@ -120,7 +177,7 @@ public class MultiValueDictionarySlimTests
     var enumCollection = dict1["enum"];
     Assert.AreEqual(dataCount, enumCollection.Count);
     CollectionAssert.AreEqual(Enumerate().ToArray(), enumCollection.ToArray());
-    CollectionAssert.AreEqual(Enumerate(), enumCollection.ToEnumerator());
+    CollectionAssert.AreEqual(Enumerate(), enumCollection.ToEnumerable());
 
     var dict2 = new MultiValueDictionarySlim<string, int>();
     dict2.AddValueRange("list", Enumerate().ToList());
@@ -130,7 +187,7 @@ public class MultiValueDictionarySlimTests
     var listCollection = dict2["list"];
     Assert.AreEqual(dataCount, listCollection.Count);
     CollectionAssert.AreEqual(Enumerate().ToArray(), listCollection.ToArray());
-    CollectionAssert.AreEqual(Enumerate(), listCollection.ToEnumerator());
+    CollectionAssert.AreEqual(Enumerate(), listCollection.ToEnumerable());
 
     var emptyCollection = dict2["empty"];
     Assert.AreEqual(0, emptyCollection.Count);
@@ -403,7 +460,7 @@ public class MultiValueDictionarySlimTests
         }
 
         var y = pair.Key * 100;
-        foreach (var i in pair.Value.ToEnumerator())
+        foreach (var i in pair.Value.ToEnumerable())
         {
           Assert.AreEqual(y, i);
           y++;
@@ -461,7 +518,7 @@ public class MultiValueDictionarySlimTests
     var slimKeys = dictionarySlim.Keys.ToArray();
     Assert.AreEqual(dictionarySlim.Count, slimKeys.Length);
     CollectionAssert.AreEquivalent(dictionaryNaive.Keys, slimKeys);
-    CollectionAssert.AreEquivalent(dictionaryNaive.Keys, dictionarySlim.Keys.ToEnumerator());
+    CollectionAssert.AreEquivalent(dictionaryNaive.Keys, dictionarySlim.Keys.ToEnumerable());
 
     // check values
     Assert.AreEqual(dictionarySlim.ValuesCount, dictionarySlim.Values.Count);
@@ -469,7 +526,7 @@ public class MultiValueDictionarySlimTests
     var slimValues = dictionarySlim.Values.ToArray();
     Assert.AreEqual(dictionarySlim.ValuesCount, slimValues.Length);
     CollectionAssert.AreEquivalent(dictionaryNaive.Values, slimValues);
-    CollectionAssert.AreEquivalent(dictionaryNaive.Values, dictionarySlim.Values.ToEnumerator());
+    CollectionAssert.AreEquivalent(dictionaryNaive.Values, dictionarySlim.Values.ToEnumerable());
 
     foreach (var pair in dictionaryNaive)
     {
