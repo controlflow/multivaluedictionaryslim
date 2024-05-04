@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+// ReSharper disable UseCollectionExpression
 
 // ReSharper disable IntroduceOptionalParameters.Global
 // ReSharper disable MemberHidesStaticFromOuterClass
@@ -11,6 +12,18 @@ using System.Runtime.CompilerServices;
 
 namespace ControlFlow.Collections;
 
+// todo: enumerate in insertion order + assert
+
+/// <summary>
+/// Represents a dictionary mapping <typeparamref name="TKey"/> keys to collections of <typeparamref name="TValue"/> values.
+///
+/// This dictionary is optimized for pooling scenarios.
+///
+/// 
+/// All the data is stored in contiguous memory arrays
+/// </summary>
+/// <typeparam name="TKey">Type of keys</typeparam>
+/// <typeparam name="TValue">Type of values</typeparam>
 [DebuggerTypeProxy(typeof(MultiValueDictionarySlimDebugView<,>))]
 [DebuggerDisplay("Count = {Count}")]
 public class MultiValueDictionarySlim<TKey, TValue>
@@ -441,9 +454,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
-  public Enumerator GetEnumerator() => new(this);
+  public KeyValuePairEnumerator GetEnumerator() => new(this);
 
-  public struct Enumerator
+  public struct KeyValuePairEnumerator
   {
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
     private readonly int _version;
@@ -452,10 +465,10 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     [Obsolete("Do not use", error: true)]
 #pragma warning disable CS8618
-    public Enumerator() { }
+    public KeyValuePairEnumerator() { }
 #pragma warning restore CS8618
 
-    internal Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
+    internal KeyValuePairEnumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
     {
       _dictionary = dictionary;
       _version = dictionary._version;
@@ -517,14 +530,14 @@ public class MultiValueDictionarySlim<TKey, TValue>
     public int Count => _endIndex < 0 ? 0 : _dictionary._indexes[_endIndex];
     public bool IsEmpty => _endIndex < 0;
 
-    public Enumerator GetEnumerator()
+    public ValuesEnumerator GetEnumerator()
     {
       if (_version != _dictionary._version)
       {
         ThrowHelper.ThrowInvalidOperationException_InvalidOperation_EnumFailedVersion();
       }
 
-      return new Enumerator(_dictionary, _startIndex, _endIndex);
+      return new ValuesEnumerator(_dictionary, _startIndex, _endIndex);
     }
 
     public IEnumerable<TValue> ToEnumerable()
@@ -536,7 +549,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       }
     }
 
-    public struct Enumerator
+    public struct ValuesEnumerator
     {
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
       private readonly int _version;
@@ -546,10 +559,10 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       [Obsolete("Do not use", error: true)]
 #pragma warning disable CS8618
-      public Enumerator() { }
+      public ValuesEnumerator() { }
 #pragma warning restore CS8618
 
-      internal Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
+      internal ValuesEnumerator(MultiValueDictionarySlim<TKey, TValue> dictionary, int startIndex, int endIndex)
       {
         _dictionary = dictionary;
         _version = dictionary._version;
@@ -637,7 +650,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public int Count => _dictionary.Count;
 
-    public Enumerator GetEnumerator() => new(_dictionary);
+    public KeyEnumerator GetEnumerator() => new(_dictionary);
 
     public IEnumerable<TKey> ToEnumerable()
     {
@@ -648,7 +661,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       }
     }
 
-    public struct Enumerator
+    public struct KeyEnumerator
     {
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
       private readonly int _version;
@@ -657,10 +670,10 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       [Obsolete("Do not use", error: true)]
 #pragma warning disable CS8618
-      public Enumerator() { }
+      public KeyEnumerator() { }
 #pragma warning restore CS8618
 
-      internal Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
+      internal KeyEnumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
       {
         _dictionary = dictionary;
         _version = dictionary._version;
@@ -732,7 +745,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public int Count => _dictionary.ValuesCount;
 
-    public Enumerator GetEnumerator() => new(_dictionary);
+    public AllValuesEnumerator GetEnumerator() => new(_dictionary);
 
     public IEnumerable<TValue> ToEnumerable()
     {
@@ -743,7 +756,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       }
     }
 
-    public struct Enumerator
+    public struct AllValuesEnumerator
     {
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
       private readonly int _version;
@@ -754,10 +767,10 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       [Obsolete("Do not use", error: true)]
 #pragma warning disable CS8618
-      public Enumerator() { }
+      public AllValuesEnumerator() { }
 #pragma warning restore CS8618
 
-      internal Enumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
+      internal AllValuesEnumerator(MultiValueDictionarySlim<TKey, TValue> dictionary)
       {
         _dictionary = dictionary;
         _version = dictionary._version;
