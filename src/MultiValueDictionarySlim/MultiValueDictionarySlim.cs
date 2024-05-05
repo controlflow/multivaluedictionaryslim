@@ -5,9 +5,8 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 // ReSharper disable UseCollectionExpression
-
+// ReSharper disable ConvertToAutoPropertyWithPrivateSetter
 // ReSharper disable IntroduceOptionalParameters.Global
-// ReSharper disable MemberHidesStaticFromOuterClass
 // ReSharper disable MergeConditionalExpression
 
 namespace ControlFlow.Collections;
@@ -15,8 +14,17 @@ namespace ControlFlow.Collections;
 // todo: enumerate in insertion order + assert
 
 /// <summary>
-/// Represents a dictionary mapping <typeparamref name="TKey"/> keys to collections of <typeparamref name="TValue"/> values.
+/// Represents a dictionary to map <typeparamref name="TKey"/> keys to collections of <typeparamref name="TValue"/> values.
+/// This dictionary is a implementation of `Dictionary{TKey, List{TValue}}` that is optimized:
+/// 1. Not to allocate lists on the heap for each key;
+/// 2. To use contiguous memory (arrays) to store both keys and values - this makes this dictionary pooling-friendly.
 ///
+/// Trade-offs:
+/// 1. Generally it consumes more memory and wastes more memory for values. Individual `List{TValue}` instances
+///    expand individually when needed, this dictionary expands the whole array for values
+/// 2. Values are stored as a linked-lists - so no list operatios support, only enumeration + count.
+/// 3. It is more likely for values array to get in
+/// 
 /// This dictionary is optimized for pooling scenarios.
 ///
 /// 
@@ -502,7 +510,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       return false;
     }
 
-    public KeyValuePair<TKey, ValuesCollection> Current => _current;
+    public readonly KeyValuePair<TKey, ValuesCollection> Current => _current;
   }
 
   [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
@@ -538,15 +546,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
       }
 
       return new ValuesEnumerator(_dictionary, _startIndex, _endIndex);
-    }
-
-    public IEnumerable<TValue> ToEnumerable()
-    {
-      var enumerator = GetEnumerator();
-      while (enumerator.MoveNext())
-      {
-        yield return enumerator.Current;
-      }
     }
 
     public struct ValuesEnumerator
@@ -604,7 +603,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
         return false;
       }
 
-      public TValue Current => _current!;
+      public readonly TValue Current => _current!;
     }
 
     public TValue[] ToArray()
@@ -652,15 +651,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public KeyEnumerator GetEnumerator() => new(_dictionary);
 
-    public IEnumerable<TKey> ToEnumerable()
-    {
-      var enumerator = GetEnumerator();
-      while (enumerator.MoveNext())
-      {
-        yield return enumerator.Current;
-      }
-    }
-
     public struct KeyEnumerator
     {
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
@@ -706,7 +696,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
         return false;
       }
 
-      public TKey Current => _current!;
+      public readonly TKey Current => _current!;
     }
 
     public TKey[] ToArray()
@@ -746,15 +736,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
     public int Count => _dictionary.ValuesCount;
 
     public AllValuesEnumerator GetEnumerator() => new(_dictionary);
-
-    public IEnumerable<TValue> ToEnumerable()
-    {
-      var enumerator = GetEnumerator();
-      while (enumerator.MoveNext())
-      {
-        yield return enumerator.Current;
-      }
-    }
 
     public struct AllValuesEnumerator
     {
@@ -827,7 +808,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
         return false;
       }
 
-      public TValue Current => _current!;
+      public readonly TValue Current => _current!;
     }
 
     public TValue[] ToArray()

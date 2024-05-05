@@ -1,75 +1,70 @@
 using System.Diagnostics;
 
-namespace System.Collections.Generic
+namespace System.Collections.Generic;
+
+internal class HashHelpers
 {
-  internal class HashHelpers
+  private const int MaxPrimeArrayLength = 0x7FFFFFC3;
+
+  public static int ExpandPrime(int oldSize)
   {
-    // This is the maximum prime smaller than Array.MaxLength.
-    public const int MaxPrimeArrayLength = 0x7FFFFFC3;
+    var newSize = 2 * oldSize;
 
-    // Returns size of hashtable to grow to.
-    public static int ExpandPrime(int oldSize)
+    if ((uint)newSize > MaxPrimeArrayLength && MaxPrimeArrayLength > oldSize)
     {
-      int newSize = 2 * oldSize;
-
-      // Allow the hashtables to grow to maximum possible size (~2G elements) before encountering capacity overflow.
-      // Note that this check works even when _items.Length overflowed thanks to the (uint) cast
-      if ((uint)newSize > MaxPrimeArrayLength && MaxPrimeArrayLength > oldSize)
-      {
-        Debug.Assert(MaxPrimeArrayLength == GetPrime(MaxPrimeArrayLength), "Invalid MaxPrimeArrayLength");
-        return MaxPrimeArrayLength;
-      }
-
-      return GetPrime(newSize);
+      Debug.Assert(MaxPrimeArrayLength == GetPrime(MaxPrimeArrayLength), "Invalid MaxPrimeArrayLength");
+      return MaxPrimeArrayLength;
     }
 
-    private static bool IsPrime(int candidate)
-    {
-      if ((candidate & 1) != 0)
-      {
-        var limit = (int)Math.Sqrt(candidate);
-        for (var divisor = 3; divisor <= limit; divisor += 2)
-        {
-          if (candidate % divisor == 0)
-            return false;
-        }
+    return GetPrime(newSize);
+  }
 
-        return true;
+  private static bool IsPrime(int candidate)
+  {
+    if ((candidate & 1) != 0)
+    {
+      var limit = (int)Math.Sqrt(candidate);
+      for (var divisor = 3; divisor <= limit; divisor += 2)
+      {
+        if (candidate % divisor == 0)
+          return false;
       }
 
-      return candidate == 2;
+      return true;
     }
 
-    public const int HashPrime = 101;
+    return candidate == 2;
+  }
 
-    private static readonly int[] s_primes =
+  public const int HashPrime = 101;
+
+  private static readonly int[] s_primes =
+  {
+    3, 7, 11, 17, 23, 29, 37, 47, 59, 71, 89, 107, 131, 163, 197, 239, 293, 353, 431, 521, 631, 761, 919,
+    1103, 1327, 1597, 1931, 2333, 2801, 3371, 4049, 4861, 5839, 7013, 8419, 10103, 12143, 14591,
+    17519, 21023, 25229, 30293, 36353, 43627, 52361, 62851, 75431, 90523, 108631, 130363, 156437,
+    187751, 225307, 270371, 324449, 389357, 467237, 560689, 672827, 807403, 968897, 1162687, 1395263,
+    1674319, 2009191, 2411033, 2893249, 3471899, 4166287, 4999559, 5999471, 7199369
+  };
+
+  public static int GetPrime(int min)
+  {
+    if (min < 0)
+      throw new ArgumentOutOfRangeException(nameof(min));
+
+    foreach (var prime in s_primes)
     {
-      3, 7, 11, 17, 23, 29, 37, 47, 59, 71, 89, 107, 131, 163, 197, 239, 293, 353, 431, 521, 631, 761, 919,
-      1103, 1327, 1597, 1931, 2333, 2801, 3371, 4049, 4861, 5839, 7013, 8419, 10103, 12143, 14591,
-      17519, 21023, 25229, 30293, 36353, 43627, 52361, 62851, 75431, 90523, 108631, 130363, 156437,
-      187751, 225307, 270371, 324449, 389357, 467237, 560689, 672827, 807403, 968897, 1162687, 1395263,
-      1674319, 2009191, 2411033, 2893249, 3471899, 4166287, 4999559, 5999471, 7199369
-    };
-
-    public static int GetPrime(int min)
-    {
-      if (min < 0)
-        throw new ArgumentOutOfRangeException(nameof(min));
-
-      foreach (var prime in s_primes)
-      {
-        if (prime >= min)
-          return prime;
-      }
-
-      // Outside of our predefined table. Compute the hard way.
-      for (var i = (min | 1); i < int.MaxValue; i += 2)
-      {
-        if (IsPrime(i) && ((i - 1) % HashPrime != 0))
-          return i;
-      }
-
-      return min;
+      if (prime >= min)
+        return prime;
     }
+
+    // Outside our predefined table. Compute the hard way.
+    for (var i = (min | 1); i < int.MaxValue; i += 2)
+    {
+      if (IsPrime(i) && ((i - 1) % HashPrime != 0))
+        return i;
+    }
+
+    return min;
   }
 }

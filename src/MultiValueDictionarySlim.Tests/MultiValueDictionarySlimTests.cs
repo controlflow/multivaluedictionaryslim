@@ -1,4 +1,5 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 using NUnit.Framework;
 
 namespace ControlFlow.Collections.Tests;
@@ -91,7 +92,6 @@ public class MultiValueDictionarySlimTests
     Assert.IsFalse(dictionary[7].IsEmpty);
     Assert.AreEqual(3, dictionary[7].Count);
     Assert.AreEqual(new[] { "71", "72", "73" }, dictionary[7].ToArray());
-    Assert.AreEqual(new[] { "71", "72", "73" }, dictionary[7].ToEnumerable().ToArray());
 
     dictionary.Clear();
 
@@ -143,25 +143,6 @@ public class MultiValueDictionarySlimTests
     Assert.IsTrue(keyEnumerator2.MoveNext());
     dictionarySlim.Add("bbb2", 2);
     Assert.Throws<InvalidOperationException>(() => keyEnumerator2.MoveNext());
-
-    using var keyEnumerator3 = dictionarySlim.Keys.ToEnumerable().GetEnumerator();
-    dictionarySlim.Add("bbb3", 3);
-    Assert.Throws<InvalidOperationException>(() => keyEnumerator3.MoveNext());
-
-    // note: only captures version on .GetEnumerator() call, this is just a wrapper
-    var keyEnumerable = dictionarySlim.Keys.ToEnumerable();
-
-    // ReSharper disable once PossibleMultipleEnumeration
-    using var keyEnumerator4 = keyEnumerable.GetEnumerator();
-    Assert.IsTrue(keyEnumerator4.MoveNext());
-    dictionarySlim.Add("bbb4", 4);
-    Assert.Throws<InvalidOperationException>(() => keyEnumerator4.MoveNext());
-
-    // ReSharper disable once PossibleMultipleEnumeration
-    using var keyEnumerator5 = keyEnumerable.GetEnumerator();
-    Assert.IsTrue(keyEnumerator5.MoveNext());
-    dictionarySlim.Add("bbb5", 5);
-    Assert.Throws<InvalidOperationException>(() => keyEnumerator5.MoveNext());
   }
 
   [Test]
@@ -177,7 +158,6 @@ public class MultiValueDictionarySlimTests
     var enumCollection = dict1["enum"];
     Assert.AreEqual(dataCount, enumCollection.Count);
     CollectionAssert.AreEqual(Enumerate().ToArray(), enumCollection.ToArray());
-    CollectionAssert.AreEqual(Enumerate(), enumCollection.ToEnumerable());
 
     var dict2 = new MultiValueDictionarySlim<string, int>();
     dict2.AddValueRange("list", Enumerate().ToList());
@@ -187,7 +167,6 @@ public class MultiValueDictionarySlimTests
     var listCollection = dict2["list"];
     Assert.AreEqual(dataCount, listCollection.Count);
     CollectionAssert.AreEqual(Enumerate().ToArray(), listCollection.ToArray());
-    CollectionAssert.AreEqual(Enumerate(), listCollection.ToEnumerable());
 
     var emptyCollection = dict2["empty"];
     Assert.AreEqual(0, emptyCollection.Count);
@@ -460,7 +439,7 @@ public class MultiValueDictionarySlimTests
         }
 
         var y = pair.Key * 100;
-        foreach (var i in pair.Value.ToEnumerable())
+        foreach (var i in pair.Value)
         {
           Assert.AreEqual(y, i);
           y++;
@@ -518,7 +497,7 @@ public class MultiValueDictionarySlimTests
     var slimKeys = dictionarySlim.Keys.ToArray();
     Assert.AreEqual(dictionarySlim.Count, slimKeys.Length);
     CollectionAssert.AreEquivalent(dictionaryNaive.Keys, slimKeys);
-    CollectionAssert.AreEquivalent(dictionaryNaive.Keys, dictionarySlim.Keys.ToEnumerable());
+    CollectionAssert.AreEquivalent(dictionaryNaive.Keys, dictionarySlim.Keys.ToArray());
 
     // check values
     Assert.AreEqual(dictionarySlim.ValuesCount, dictionarySlim.Values.Count);
@@ -526,7 +505,7 @@ public class MultiValueDictionarySlimTests
     var slimValues = dictionarySlim.Values.ToArray();
     Assert.AreEqual(dictionarySlim.ValuesCount, slimValues.Length);
     CollectionAssert.AreEquivalent(dictionaryNaive.Values, slimValues);
-    CollectionAssert.AreEquivalent(dictionaryNaive.Values, dictionarySlim.Values.ToEnumerable());
+    CollectionAssert.AreEquivalent(dictionaryNaive.Values, dictionarySlim.Values.ToArray());
 
     foreach (var pair in dictionaryNaive)
     {
@@ -587,5 +566,133 @@ public class MultiValueDictionarySlimTests
 
     public bool Equals(int x, int y) => x == y;
     public int GetHashCode(int obj) => obj / 10;
+  }
+
+  private class MultiValueDictionaryNaive<TKey, TValue> : IEnumerable<KeyValuePair<TKey, List<TValue>>>
+    where TKey : notnull
+  {
+    private readonly Dictionary<TKey, List<TValue>> _dictionary;
+
+    public MultiValueDictionaryNaive()
+    {
+      _dictionary = new Dictionary<TKey, List<TValue>>();
+    }
+
+    public MultiValueDictionaryNaive(IEqualityComparer<TKey> comparer)
+    {
+      _dictionary = new Dictionary<TKey, List<TValue>>(comparer);
+    }
+
+    public MultiValueDictionaryNaive(int keyCapacity, int valueCapacity)
+    {
+      _dictionary = new Dictionary<TKey, List<TValue>>(capacity: keyCapacity);
+      _ = valueCapacity;
+    }
+
+    public MultiValueDictionaryNaive(int keyCapacity, int valueCapacity, IEqualityComparer<TKey>? comparer)
+    {
+      _dictionary = new Dictionary<TKey, List<TValue>>(capacity: keyCapacity, comparer);
+      _ = valueCapacity;
+    }
+
+    public int Count => _dictionary.Count;
+    public int ValuesCount => _dictionary.Values.Sum(x => x.Count);
+    public int ValuesCapacity => _dictionary.Values.Sum(x => x.Capacity);
+
+    public Dictionary<TKey, List<TValue>>.KeyCollection Keys => _dictionary.Keys;
+    public IEnumerable<TValue> Values => _dictionary.Values.SelectMany(x => x);
+
+    public void Add(TKey key, TValue value)
+    {
+      if (!_dictionary.TryGetValue(key, out var list))
+      {
+        _dictionary[key] = list = new List<TValue>();
+      }
+
+      list.Add(value);
+    }
+
+    public bool Remove(TKey key)
+    {
+      return _dictionary.Remove(key);
+    }
+
+    public void Clear()
+    {
+      _dictionary.Clear();
+    }
+
+    public IEnumerator<KeyValuePair<TKey, List<TValue>>> GetEnumerator()
+    {
+      foreach (var pair in _dictionary)
+      {
+        yield return new KeyValuePair<TKey, List<TValue>>(pair.Key, pair.Value);
+      }
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    public IReadOnlyList<TValue> this[TKey key]
+    {
+      get
+      {
+        if (_dictionary.TryGetValue(key, out var list))
+        {
+          return list;
+        }
+
+        return Array.Empty<TValue>();
+      }
+    }
+
+    public void AddValueRange(TKey key, IEnumerable<TValue> values)
+    {
+      if (values is ICollection<TValue> collection)
+      {
+        if (collection.Count > 0)
+        {
+          if (!_dictionary.TryGetValue(key, out var list))
+          {
+            _dictionary[key] = list = new List<TValue>();
+          }
+
+          list.AddRange(collection);
+        }
+      }
+      else
+      {
+        using var enumerator = values.GetEnumerator();
+
+        if (enumerator.MoveNext())
+        {
+          if (!_dictionary.TryGetValue(key, out var list))
+          {
+            _dictionary[key] = list = new List<TValue>();
+          }
+
+          list.Add(enumerator.Current);
+
+          while (enumerator.MoveNext())
+          {
+            list.Add(enumerator.Current);
+          }
+        }
+      }
+    }
+
+    public void TrimExcessKeys()
+    {
+#if NETCOREAPP
+    _dictionary.TrimExcess();
+#endif
+    }
+
+    public void TrimExcessValues()
+    {
+      foreach (var list in _dictionary.Values)
+      {
+        list.Capacity = list.Count;
+      }
+    }
   }
 }
