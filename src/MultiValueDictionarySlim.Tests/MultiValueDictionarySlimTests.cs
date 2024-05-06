@@ -221,6 +221,8 @@ public class MultiValueDictionarySlimTests
 
     for (var operationsCount = _random.Next(0, 500); operationsCount >= 0; operationsCount--)
     {
+      var hasItems = dictionarySlim.Count > 0;
+
       switch (_random.Next(minValue: 0, maxValue: 23))
       {
         // add key-value pair
@@ -271,11 +273,11 @@ public class MultiValueDictionarySlimTests
         }
 
         // key removal
-        case 18 when dictionaryNaive.Count > 0:
+        case 18 when hasItems:
         {
           var index = _random.Next(0, dictionaryNaive.Count);
           var keyToRemove = dictionaryNaive.Keys.ElementAt(index);
-          var valuesCount = dictionarySlim.ValuesCount;
+          var valuesCountBefore = dictionarySlim.ValuesCount;
 
           Assert.IsTrue(dictionarySlim.ContainsKey(keyToRemove));
           var keyValuesCount = dictionarySlim[keyToRemove].Count;
@@ -286,16 +288,16 @@ public class MultiValueDictionarySlimTests
 
           Assert.AreEqual(r1, r2);
           Assert.AreEqual(dictionaryNaive.Count, dictionarySlim.Count);
-          Assert.AreEqual(valuesCount - keyValuesCount, dictionarySlim.ValuesCount);
+          Assert.AreEqual(valuesCountBefore - keyValuesCount, dictionarySlim.ValuesCount);
           break;
         }
 
         // key removal via ProcessEach
-        case 19 when dictionaryNaive.Count > 0:
+        case 19 when hasItems:
         {
           var index = _random.Next(0, dictionaryNaive.Count);
           var keyToRemove = dictionaryNaive.Keys.ElementAt(index);
-          var valuesCount = dictionarySlim.ValuesCount;
+          var valuesCountBefore = dictionarySlim.ValuesCount;
 
           Assert.IsTrue(dictionarySlim.ContainsKey(keyToRemove));
           var keyValuesCount = dictionarySlim[keyToRemove].Count;
@@ -303,13 +305,15 @@ public class MultiValueDictionarySlimTests
 
           dictionaryNaive.Remove(keyToRemove);
           dictionarySlim.ProcessEach(
-            keyToRemove, static (int keyToRemove, int key, ref MultiValueDictionarySlim<int, string>.MutableValuesCollection collection) =>
+            keyToRemove, static (keyToRemove, key, collection) =>
             {
+              Assert.That(collection.Count > 0);
+
               if (key == keyToRemove) collection.Clear();
             });
 
           Assert.AreEqual(dictionaryNaive.Count, dictionarySlim.Count);
-          Assert.AreEqual(valuesCount - keyValuesCount, dictionarySlim.ValuesCount);
+          Assert.AreEqual(valuesCountBefore - keyValuesCount, dictionarySlim.ValuesCount);
 
           dictionarySlim.VerifyConsistency();
           break;
@@ -358,10 +362,39 @@ public class MultiValueDictionarySlimTests
           break;
         }
 
-        case 23:
+        // value add via ProcessEach
+        case 23 when hasItems:
         {
+          var index = _random.Next(0, dictionaryNaive.Count);
+          var existingKey = dictionaryNaive.Keys.ElementAt(index);
+          var valuesCountBefore = dictionarySlim.ValuesCount;
+
+          Assert.IsTrue(dictionarySlim.ContainsKey(existingKey));
+          var keyValuesCount = dictionarySlim[existingKey].Count;
+          Assert.That(keyValuesCount, Is.GreaterThan(0));
+
+          var newValue = RandomString();
+          dictionaryNaive.Add(existingKey, newValue);
+          dictionarySlim.ProcessEach(
+            state: (existingKey, newValue), static (state, key, collection) =>
+            {
+              Assert.That(collection.Count > 0);
+
+              if (key == state.existingKey)
+              {
+                // todo: try clear before
+                collection.Add(state.newValue);
+              }
+            });
+
+          Assert.AreEqual(keyValuesCount + 1, dictionarySlim[existingKey].Count);
+          Assert.AreEqual(dictionaryNaive.Count, dictionarySlim.Count);
+          Assert.AreEqual(valuesCountBefore + 1, dictionaryNaive.ValuesCount);
+          Assert.AreEqual(valuesCountBefore + 1, dictionarySlim.ValuesCount);
           break;
         }
+        
+        // todo: key replace
       }
 
       dictionarySlim.VerifyConsistency();
@@ -558,8 +591,7 @@ public class MultiValueDictionarySlimTests
     dictionarySlim.Add("remove_me", 1);
 
     dictionarySlim.ProcessEach(
-      state: 42,
-      process: (int state, string key, ref MultiValueDictionarySlim<string, int>.MutableValuesCollection collection) =>
+      state: 42, processKey: (state, key, collection) =>
       {
         Assert.AreEqual(42, state);
 

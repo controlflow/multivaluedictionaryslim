@@ -21,8 +21,11 @@ namespace ControlFlow.Collections;
 /// 1. Generally it consumes (and wastes) more memory. Individual `List{TValue}` instances
 ///    grow when needed, while this dictionary grows the whole array for values.
 /// 2. This dictionary also uses 1 `int` per each `TValue` stored (for linked list).
+///    Probably not a problem until you store a LOT of values for just a few keys.
 /// 3. Values are stored as a linked-lists - so no list operatios support, only enumeration + count.
 /// 4. It is more likely for values array to make it into LOH.
+/// 5. Key removal/values clear is a O(n) operation if <typeparamref name="TValue"/> is a reference type,
+///    because of the need of linked list traversal to clear the managed references.
 /// </summary>
 /// <typeparam name="TKey">Type of keys</typeparam>
 /// <typeparam name="TValue">Type of values</typeparam>
@@ -815,7 +818,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
-  public void ProcessEach<TState>(TState state, Processor<TState> process)
+  public void ProcessEach<TState>(TState state, Action<TState, TKey, MutableValuesCollection> processKey)
   {
     for (var index = 0; (uint)index < (uint)_keyCount; index++)
     {
@@ -823,8 +826,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       if (entry.Next >= -1)
       {
-        var valuesCollection = new MutableValuesCollection(this, entry.StartIndex, entry.EndIndex);
-        process(state, entry.Key, ref valuesCollection);
+        var valuesCollection = new MutableValuesCollection(this, index);
+        processKey(state, entry.Key, valuesCollection);
 
         if (valuesCollection.Count == 0)
         {
@@ -875,45 +878,61 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
+  // todo: drop ref passing
   public delegate void Processor<in TState>(TState state, TKey key, ref MutableValuesCollection collection);
 
   [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
   [DebuggerDisplay("Count = {Count}")]
-  public struct MutableValuesCollection
+  public readonly struct MutableValuesCollection
   {
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
-    private readonly int _originalStartIndex;
-    private readonly int _originalEndIndex;
-    private int _endIndex;
+    private readonly int _entryIndex;
 
-    internal MutableValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary, int originalStartIndex, int endIndex)
+    internal MutableValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary, int entryIndex)
     {
       _dictionary = dictionary;
-      _originalStartIndex = originalStartIndex;
-      _originalEndIndex = endIndex;
-      _endIndex = endIndex;
+      _entryIndex = entryIndex;
     }
 
-    public readonly int Count => _endIndex < 0 ? 0 : _dictionary._indexes[_endIndex];
-    public readonly bool IsEmpty => _endIndex < 0;
+    private int ValuesEndIndex => _dictionary._entries![_entryIndex].EndIndex;
 
-    public readonly ValuesCollection.ValuesEnumerator GetEnumerator()
+    public int Count
     {
-      return new ValuesCollection.ValuesEnumerator(_dictionary, _originalStartIndex, _endIndex);
+      get
+      {
+        var endIndex = ValuesEndIndex;
+        return endIndex < 0 ? 0 : _dictionary._indexes[endIndex];
+      }
     }
 
-    public readonly TValue[] ToArray()
+    public bool IsEmpty => ValuesEndIndex < 0;
+
+    // todo: test this!
+    public ValuesCollection.ValuesEnumerator GetEnumerator()
     {
-      var valuesCollection = new ValuesCollection(_dictionary, _originalStartIndex, _endIndex);
+      var entry = _dictionary._entries![_entryIndex];
+      return new ValuesCollection.ValuesEnumerator(_dictionary, entry.StartIndex, entry.EndIndex);
+    }
+
+    public TValue[] ToArray()
+    {
+      var entry = _dictionary._entries![_entryIndex];
+      var valuesCollection = new ValuesCollection(_dictionary, entry.StartIndex, entry.EndIndex);
       return valuesCollection.ToArray();
     }
 
     public void Clear()
     {
-      if (_endIndex < 0) return; // already empty
+      ref var entry = ref _dictionary._entries![_entryIndex];
+      if (entry.EndIndex < 0) return; // already empty
 
-      _dictionary.ClearSameKeyValues(_originalStartIndex, _endIndex);
-      _endIndex = -1;
+      _dictionary.ClearSameKeyValues(entry.StartIndex, entry.EndIndex);
+      entry.EndIndex = -1; // invalid state to indicate emptiness
+    }
+
+    public void Add(TValue value)
+    {
+      _dictionary.StoreEntryValue(ref _dictionary._entries![_entryIndex], value);
     }
   }
 
@@ -1147,9 +1166,9 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
       if (typeof(TKey).IsValueType)
       {
-        // ValueType: Devirtualize with EqualityComparer<TValue>.Default intrinsic
+        // devirtualize with EqualityComparer<TValue>.Default intrinsic for value types
 
-        i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
+        i--; // Value in _buckets is 1-based; subtract 1 from `i`. We do it here, so it fuses with the following conditional
         do
         {
           // Should be a while loop https://github.com/dotnet/runtime/issues/9422
@@ -1171,9 +1190,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       }
       else // reference type
       {
-        // Object type: Shared Generic, EqualityComparer<TValue>.Default won't devirtualize
-        // https://github.com/dotnet/runtime/issues/10050
-        // So cache in a local rather than get EqualityComparer per loop iteration
+        // cache in the local for reference types
         var defaultComparer = EqualityComparer<TKey>.Default;
 
         i--; // Value in _buckets is 1-based; subtract 1 from i. We do it here so it fuses with the following conditional.
