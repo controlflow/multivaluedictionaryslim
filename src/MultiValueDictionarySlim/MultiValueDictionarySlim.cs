@@ -149,37 +149,14 @@ public class MultiValueDictionarySlim<TKey, TValue>
     // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
     if (values == null) ThrowHelper.ThrowArgumentNullException(nameof(values));
 
-    if (values is ICollection collection)
+    if (values is ICollection<TValue> collection)
     {
       var collectionCount = collection.Count;
       if (collectionCount > 0)
       {
         var entryIndex = GetOrCreateEntry(key);
         ref var entry = ref _entries![entryIndex];
-
-        if (_valuesCount + collectionCount <= _values.Length) // has tail space
-        {
-          CopyValuesToValuesListTail(ref entry, collection, collectionCount);
-        }
-        // fill the gaps
-        else if (_valuesCount - _valueFreeCount + collectionCount < _values.Length)
-        {
-          using var enumerator = values.GetEnumerator(); // alloc :(
-
-          while (enumerator.MoveNext())
-          {
-            StoreEntryValue(ref entry, enumerator.Current);
-          }
-        }
-        // resize and copy to the tail
-        else
-        {
-          ResizeValues(extraCapacity: collectionCount);
-
-          Debug.Assert(_valuesCount + collectionCount <= _values.Length);
-
-          CopyValuesToValuesListTail(ref entry, collection, collectionCount);
-        }
+        StoreEntryValuesCollection(ref entry, collection, collectionCount);
       }
     }
     else
@@ -201,40 +178,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
 
     _version++;
-    return;
-
-    void CopyValuesToValuesListTail(ref Entry entry, ICollection list, int listCount)
-    {
-      Debug.Assert(listCount > 0);
-
-      list.CopyTo(_values, index: _valuesCount);
-
-      var endIndex = _valuesCount + listCount - 1;
-      var indexes = _indexes;
-      int countBefore;
-
-      if (entry.EndIndex < 0) // empty entry
-      {
-        countBefore = 0;
-        entry.StartIndex = _valuesCount;
-        entry.EndIndex = endIndex;
-      }
-      else
-      {
-        countBefore = indexes[entry.EndIndex];
-        indexes[entry.EndIndex] = _valuesCount; // link from last value to head of the copied list
-        entry.EndIndex = endIndex;
-      }
-
-      for (var index = _valuesCount; index < endIndex; index++)
-      {
-        indexes[index] = index + 1;
-      }
-
-      indexes[endIndex] = countBefore + listCount;
-
-      _valuesCount += listCount;
-    }
   }
 
   public bool Remove(TKey key)
@@ -489,9 +432,13 @@ public class MultiValueDictionarySlim<TKey, TValue>
   [DebuggerDisplay("Count = {Count}")]
   public readonly struct ValuesCollection
   {
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private readonly int _version;
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private readonly int _startIndex;
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private readonly int _endIndex;
 
     [Obsolete("Do not use", error: true)]
@@ -522,10 +469,15 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public struct ValuesEnumerator
     {
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private readonly int _version;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private readonly int _endIndex;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private int _currentIndex;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private TValue? _current;
 
       [Obsolete("Do not use", error: true)]
@@ -612,6 +564,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   public readonly struct KeyCollection
   {
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
 
     internal KeyCollection(MultiValueDictionarySlim<TKey, TValue> dictionary)
@@ -625,9 +578,13 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public struct KeyEnumerator
     {
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private readonly int _version;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private int _index;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private TKey? _current;
 
       [Obsolete("Do not use", error: true)]
@@ -698,6 +655,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
   public readonly struct AllValuesCollection
   {
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
 
     internal AllValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary)
@@ -711,11 +669,17 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public struct AllValuesEnumerator
     {
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private readonly int _version;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private int _keyIndex;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private int _valueEndIndex;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private int _valueCurrentIndex;
+      [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private TValue? _current;
 
       [Obsolete("Do not use", error: true)]
@@ -878,14 +842,13 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
-  // todo: drop ref passing
-  public delegate void Processor<in TState>(TState state, TKey key, ref MutableValuesCollection collection);
-
   [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
   [DebuggerDisplay("Count = {Count}")]
   public readonly struct MutableValuesCollection
   {
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private readonly int _entryIndex;
 
     internal MutableValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary, int entryIndex)
@@ -894,6 +857,7 @@ public class MultiValueDictionarySlim<TKey, TValue>
       _entryIndex = entryIndex;
     }
 
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private int ValuesEndIndex => _dictionary._entries![_entryIndex].EndIndex;
 
     public int Count
@@ -907,7 +871,6 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     public bool IsEmpty => ValuesEndIndex < 0;
 
-    // todo: test this!
     public ValuesCollection.ValuesEnumerator GetEnumerator()
     {
       var entry = _dictionary._entries![_entryIndex];
@@ -927,12 +890,46 @@ public class MultiValueDictionarySlim<TKey, TValue>
       if (entry.EndIndex < 0) return; // already empty
 
       _dictionary.ClearSameKeyValues(entry.StartIndex, entry.EndIndex);
+      entry.StartIndex = 0; // note: important for GetEnumerator()
       entry.EndIndex = -1; // invalid state to indicate emptiness
+
+      _dictionary._version++;
     }
 
     public void Add(TValue value)
     {
-      _dictionary.StoreEntryValue(ref _dictionary._entries![_entryIndex], value);
+      ref var entry = ref _dictionary._entries![_entryIndex];
+      _dictionary.StoreEntryValue(ref entry, value);
+      _dictionary._version++;
+    }
+
+    public void AddRange(IEnumerable<TValue> values)
+    {
+      // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+      if (values == null) ThrowHelper.ThrowArgumentNullException(nameof(values));
+
+      if (values is ICollection<TValue> collection)
+      {
+        var collectionCount = collection.Count;
+        if (collectionCount > 0)
+        {
+          ref var entry = ref _dictionary._entries![_entryIndex];
+
+          _dictionary.StoreEntryValuesCollection(ref entry, collection, collectionCount);
+        }
+      }
+      else
+      {
+        using var enumerator = values.GetEnumerator();
+        ref var entry = ref _dictionary._entries![_entryIndex];
+
+        while (enumerator.MoveNext())
+        {
+          _dictionary.StoreEntryValue(ref entry, enumerator.Current);
+        }
+      }
+
+      _dictionary._version++;
     }
   }
 
@@ -1322,6 +1319,66 @@ public class MultiValueDictionarySlim<TKey, TValue>
       _values[valueIndex] = value;
       _indexes[valueIndex] = oldCount + 1; // new count
     }
+  }
+
+  private void StoreEntryValuesCollection(ref Entry entry, ICollection<TValue> collection, int collectionCount)
+  {
+    Debug.Assert(collectionCount > 0);
+
+    if (_valuesCount + collectionCount <= _values.Length) // has tail space
+    {
+      // can copy to the tail of the list
+    }
+    // fill the gaps
+    else if (_valuesCount - _valueFreeCount + collectionCount < _values.Length)
+    {
+      // todo: specializations
+
+      using var enumerator = collection.GetEnumerator(); // alloc :(
+
+      while (enumerator.MoveNext())
+      {
+        StoreEntryValue(ref entry, enumerator.Current);
+      }
+
+      return;
+    }
+    // resize and copy to the tail
+    else
+    {
+      ResizeValues(extraCapacity: collectionCount);
+
+      Debug.Assert(_valuesCount + collectionCount <= _values.Length);
+    }
+
+    // copy to the list tail
+    collection.CopyTo(_values, _valuesCount);
+
+    var endIndex = _valuesCount + collectionCount - 1;
+    var indexes = _indexes;
+    int countBefore;
+
+    if (entry.EndIndex < 0) // empty entry
+    {
+      countBefore = 0;
+      entry.StartIndex = _valuesCount;
+      entry.EndIndex = endIndex;
+    }
+    else
+    {
+      countBefore = indexes[entry.EndIndex];
+      indexes[entry.EndIndex] = _valuesCount; // link from last value to head of the copied list
+      entry.EndIndex = endIndex;
+    }
+
+    for (var index = _valuesCount; index < endIndex; index++)
+    {
+      indexes[index] = index + 1;
+    }
+
+    indexes[endIndex] = countBefore + collectionCount;
+
+    _valuesCount += collectionCount;
   }
 
   private void ResizeKeys()

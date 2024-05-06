@@ -40,8 +40,11 @@ public class MultiValueDictionarySlimTests
     Assert.IsFalse(enumerator0.MoveNext());
 
     Assert.IsFalse(dictionary.ContainsKey(-2));
-    Assert.IsTrue(dictionary[-2].IsEmpty);
-    Assert.AreEqual(0, dictionary[-2].Count);
+    var emptyList = dictionary[-2];
+    Assert.IsTrue(emptyList.IsEmpty);
+    Assert.AreEqual(0, emptyList.Count);
+    var emptyEnumerator = emptyList.GetEnumerator();
+    Assert.IsFalse(emptyEnumerator.MoveNext());
 
     Assert.IsTrue(dictionary.ContainsKey(1));
     var valuesList1 = dictionary[1];
@@ -222,7 +225,7 @@ public class MultiValueDictionarySlimTests
     {
       var hasItems = dictionarySlim.Count > 0;
 
-      switch (_random.Next(minValue: 0, maxValue: 23))
+      switch (_random.Next(minValue: 0, maxValue: 25))
       {
         // add key-value pair
         case >= 0 and < 17:
@@ -245,13 +248,9 @@ public class MultiValueDictionarySlimTests
         {
           var key = _random.Next(0, keysPerCollection);
 
-          var count = _random.Next(0, maxValue: 100);
-          var toAdd = new List<string>(count);
+          
 
-          for (var index = 0; index < count; index++)
-            toAdd.Add(RandomString());
-
-          var enumerable = _random.Next() % 2 == 0 ? Iterator() : toAdd;
+          var enumerable = RandomValuesCollection(out var count);
           var valuesCountBefore = dictionarySlim.ValuesCount;
 
           dictionarySlim.AddValueRange(key, enumerable);
@@ -263,12 +262,6 @@ public class MultiValueDictionarySlimTests
           Assert.AreEqual(dictionaryNaive.ValuesCount, dictionarySlim.ValuesCount);
           Assert.AreEqual(valuesCountAfter, dictionarySlim.ValuesCount);
           break;
-
-          IEnumerable<string> Iterator()
-          {
-            foreach (var x in toAdd)
-              yield return x;
-          }
         }
 
         // key removal
@@ -308,7 +301,15 @@ public class MultiValueDictionarySlimTests
             {
               Assert.That(collection.Count > 0);
 
-              if (key == keyToRemove) collection.Clear();
+              if (key == keyToRemove)
+              {
+                collection.Clear();
+
+                var enumerator = collection.GetEnumerator();
+                Assert.IsFalse(enumerator.MoveNext());
+                Assert.AreEqual(0, collection.Count);
+                Assert.IsTrue(collection.IsEmpty);
+              }
             });
 
           Assert.AreEqual(dictionaryNaive.Count, dictionarySlim.Count);
@@ -381,7 +382,6 @@ public class MultiValueDictionarySlimTests
 
               if (key == state.existingKey)
               {
-                // todo: try clear before
                 collection.Add(state.newValue);
               }
             });
@@ -392,14 +392,85 @@ public class MultiValueDictionarySlimTests
           Assert.AreEqual(valuesCountBefore + 1, dictionarySlim.ValuesCount);
           break;
         }
-        
-        // todo: key replace
+
+        // replace key values
+        case 24 when hasItems:
+        {
+          var index = _random.Next(0, dictionaryNaive.Count);
+          var existingKey = dictionaryNaive.Keys.ElementAt(index);
+          var valuesCountBefore = dictionarySlim.ValuesCount;
+          var newValues = RandomValuesCollection(out var newValuesCount);
+
+          Assert.IsTrue(dictionarySlim.ContainsKey(existingKey));
+          var keyValuesCount = dictionarySlim[existingKey].Count;
+          Assert.That(keyValuesCount, Is.GreaterThan(0));
+
+          dictionaryNaive.Remove(existingKey);
+          dictionaryNaive.AddValueRange(existingKey, newValues);
+
+          dictionarySlim.ProcessEach(
+            state: (existingKey, newValues), (state, key, collection) =>
+            {
+              Assert.That(collection.Count > 0);
+
+              if (key == state.existingKey)
+              {
+                collection.Add(RandomString());
+                collection.Clear();
+                collection.AddRange(state.newValues);
+
+                Assert.AreEqual(collection.Count, newValuesCount);
+                Assert.AreEqual(collection.IsEmpty, newValuesCount == 0);
+
+                var array = state.newValues.ToArray();
+                Assert.AreEqual(array, collection.ToArray());
+
+                var enumerator = collection.GetEnumerator();
+                foreach (var arrayItem in array)
+                {
+                  Assert.IsTrue(enumerator.MoveNext());
+                  Assert.AreEqual(arrayItem, enumerator.Current);
+                }
+
+                Assert.IsFalse(enumerator.MoveNext());
+              }
+            });
+
+          // note: key may be removed
+          Assert.AreEqual(newValuesCount, dictionarySlim[existingKey].Count);
+          Assert.AreEqual(dictionaryNaive.Count, dictionarySlim.Count);
+          Assert.AreEqual(valuesCountBefore - keyValuesCount + newValuesCount, dictionaryNaive.ValuesCount);
+          Assert.AreEqual(valuesCountBefore - keyValuesCount + newValuesCount, dictionarySlim.ValuesCount);
+          break;
+        }
       }
 
       dictionarySlim.VerifyConsistency();
     }
 
     AssertEqualAndConsistent(dictionarySlim, dictionaryNaive);
+    return;
+
+    IEnumerable<string> RandomValuesCollection(out int count)
+    {
+      count = _random.Next(0, maxValue: 100);
+      var values = new List<string>(count);
+
+      for (var index = 0; index < count; index++)
+        values.Add(RandomString());
+
+      return (_random.Next() % 3) switch
+      {
+        0 => new HashSet<string>(values),
+        1 => HideImplementation(values),
+        _ => values,
+      };
+
+      IEnumerable<string> HideImplementation(List<string> xs)
+      {
+        foreach (var x in xs) yield return x;
+      }
+    }
   }
 
   [Test]
