@@ -225,7 +225,7 @@ public class MultiValueDictionarySlimTests
     {
       var hasItems = dictionarySlim.Count > 0;
 
-      switch (_random.Next(minValue: 0, maxValue: 25))
+      switch (_random.Next(minValue: 0, maxValue: 26))
       {
         // add key-value pair
         case >= 0 and < 17:
@@ -440,6 +440,12 @@ public class MultiValueDictionarySlimTests
           Assert.AreEqual(valuesCountBefore - keyValuesCount + newValuesCount, dictionarySlim.ValuesCount);
           break;
         }
+
+        case 25:
+        {
+          AssertEqualAndConsistent(dictionarySlim, dictionaryNaive);
+          break;
+        }
       }
 
       dictionarySlim.VerifyConsistency();
@@ -609,6 +615,9 @@ public class MultiValueDictionarySlimTests
   {
     var dictionarySlim = new MultiValueDictionarySlim<string, int>();
 
+    Assert.AreEqual(0, dictionarySlim.Values.Count);
+    Assert.IsFalse(dictionarySlim.Values.GetEnumerator().MoveNext());
+
     var key1 = "aaa" + RandomString();
     var key2 = "bbb" + RandomString();
     var key3 = "ccc" + RandomString();
@@ -641,6 +650,15 @@ public class MultiValueDictionarySlimTests
     Assert.AreEqual(new[] { 111 }, enumerator.Current.Value.ToArray());
 
     Assert.IsFalse(enumerator.MoveNext());
+
+    Assert.AreEqual(dictionarySlim.ValuesCount, dictionarySlim.Values.Count);
+
+    var expected = new[] { 1, 2, 3, 11, 22, 111 };
+    CollectionAssert.AreEqual(expected, dictionarySlim.Values.ToArray());
+
+    var actualValues = new List<int>();
+    foreach (var value in dictionarySlim.Values) actualValues.Add(value);
+    CollectionAssert.AreEqual(expected, actualValues.ToArray());
   }
 
   [Test]
