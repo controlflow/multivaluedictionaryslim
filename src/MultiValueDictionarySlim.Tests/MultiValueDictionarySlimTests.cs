@@ -662,6 +662,27 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test]
+  public void AllValuesEnumerator()
+  {
+    var dictionarySlim = new MultiValueDictionarySlim<int, string>();
+
+    var enumerator1 = dictionarySlim.Values.GetEnumerator();
+    Assert.IsFalse(enumerator1.MoveNext());
+
+    dictionarySlim.Add(1, "aaa");
+    dictionarySlim.Add(2, "bbb");
+    dictionarySlim.Remove(1);
+    dictionarySlim.Add(2, "BBB");
+
+    var enumerator2 = dictionarySlim.Values.GetEnumerator();
+    Assert.IsTrue(enumerator2.MoveNext());
+    Assert.AreEqual("bbb", enumerator2.Current);
+    Assert.IsTrue(enumerator2.MoveNext());
+    Assert.AreEqual("BBB", enumerator2.Current);
+    Assert.IsFalse(enumerator2.MoveNext());
+  }
+
+  [Test]
   public void ProcessEach()
   {
     var dictionarySlim = new MultiValueDictionarySlim<string, int>();

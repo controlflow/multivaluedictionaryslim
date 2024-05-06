@@ -699,17 +699,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
         var dictionary = _dictionary;
         if (_version == dictionary._version && _valueCurrentIndex != _valueEndIndex)
         {
-          if (_valueCurrentIndex < 0) // before start
-          {
-            _valueCurrentIndex = ~_valueCurrentIndex;
-            _current = dictionary._values[_valueCurrentIndex];
-          }
-          else
-          {
-            _valueCurrentIndex = dictionary._indexes[_valueCurrentIndex];
-            _current = dictionary._values[_valueCurrentIndex];
-          }
-
+          _valueCurrentIndex = dictionary._indexes[_valueCurrentIndex];
+          _current = dictionary._values[_valueCurrentIndex];
           return true;
         }
 
