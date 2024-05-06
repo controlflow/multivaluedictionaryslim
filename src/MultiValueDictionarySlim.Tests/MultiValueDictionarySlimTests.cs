@@ -6,7 +6,8 @@ namespace ControlFlow.Collections.Tests;
 
 public class MultiValueDictionarySlimTests
 {
-  private readonly Random _random = new(); // 43435
+  //private readonly Random _random = new();
+  private readonly Random _random = new(43435);
 
   [Test]
   [TestCase(false)]
@@ -277,15 +278,40 @@ public class MultiValueDictionarySlimTests
           var valuesCount = dictionarySlim.ValuesCount;
 
           Assert.IsTrue(dictionarySlim.ContainsKey(keyToRemove));
-          var itemsCount = dictionarySlim[keyToRemove].Count;
-          Assert.That(itemsCount, Is.GreaterThan(0));
+          var keyValuesCount = dictionarySlim[keyToRemove].Count;
+          Assert.That(keyValuesCount, Is.GreaterThan(0));
 
           var r1 = dictionaryNaive.Remove(keyToRemove);
           var r2 = dictionarySlim.Remove(keyToRemove);
 
           Assert.AreEqual(r1, r2);
           Assert.AreEqual(dictionaryNaive.Count, dictionarySlim.Count);
-          Assert.AreEqual(valuesCount - itemsCount, dictionarySlim.ValuesCount);
+          Assert.AreEqual(valuesCount - keyValuesCount, dictionarySlim.ValuesCount);
+          break;
+        }
+
+        // key removal via ProcessEach
+        case 19 when dictionaryNaive.Count > 0:
+        {
+          var index = _random.Next(0, dictionaryNaive.Count);
+          var keyToRemove = dictionaryNaive.Keys.ElementAt(index);
+          var valuesCount = dictionarySlim.ValuesCount;
+
+          Assert.IsTrue(dictionarySlim.ContainsKey(keyToRemove));
+          var keyValuesCount = dictionarySlim[keyToRemove].Count;
+          Assert.That(keyValuesCount, Is.GreaterThan(0));
+
+          dictionaryNaive.Remove(keyToRemove);
+          dictionarySlim.ProcessEach(
+            keyToRemove, static (int keyToRemove, int key, ref MultiValueDictionarySlim<int, string>.MutableValuesCollection collection) =>
+            {
+              if (key == keyToRemove) collection.Clear();
+            });
+
+          Assert.AreEqual(dictionaryNaive.Count, dictionarySlim.Count);
+          Assert.AreEqual(valuesCount - keyValuesCount, dictionarySlim.ValuesCount);
+
+          dictionarySlim.VerifyConsistency();
           break;
         }
 
@@ -337,6 +363,8 @@ public class MultiValueDictionarySlimTests
           break;
         }
       }
+
+      dictionarySlim.VerifyConsistency();
     }
 
     AssertEqualAndConsistent(dictionarySlim, dictionaryNaive);
@@ -474,6 +502,107 @@ public class MultiValueDictionarySlimTests
 
     public bool Equals(T x, T y) => EqualityComparer<T>.Default.Equals(x, y);
     public int GetHashCode(T obj) => 42;
+  }
+
+  [Test]
+  public void InsertionOrder()
+  {
+    var dictionarySlim = new MultiValueDictionarySlim<string, int>();
+
+    var key1 = "aaa" + RandomString();
+    var key2 = "bbb" + RandomString();
+    var key3 = "ccc" + RandomString();
+    var key4 = "ddd" + RandomString();
+
+    dictionarySlim.Add(key1, 1);
+    dictionarySlim.Add(key4, 1111);
+    dictionarySlim.Add(key4, 2222);
+    dictionarySlim.Add(key2, 11);
+    dictionarySlim.Add(key1, 2);
+    dictionarySlim.Add(key1, 3);
+    dictionarySlim.Add(key3, 111);
+    dictionarySlim.Add(key2, 22);
+    dictionarySlim.Add(key4, 3333);
+    dictionarySlim.Add(key4, 4444);
+
+    dictionarySlim.Remove(key4);
+
+    var enumerator = dictionarySlim.GetEnumerator();
+    Assert.IsTrue(enumerator.MoveNext());
+    Assert.AreEqual(key1, enumerator.Current.Key);
+    Assert.AreEqual(new[] { 1, 2, 3 }, enumerator.Current.Value.ToArray());
+
+    Assert.IsTrue(enumerator.MoveNext());
+    Assert.AreEqual(key2, enumerator.Current.Key);
+    Assert.AreEqual(new[] { 11, 22 }, enumerator.Current.Value.ToArray());
+
+    Assert.IsTrue(enumerator.MoveNext());
+    Assert.AreEqual(key3, enumerator.Current.Key);
+    Assert.AreEqual(new[] { 111 }, enumerator.Current.Value.ToArray());
+
+    Assert.IsFalse(enumerator.MoveNext());
+  }
+
+  [Test]
+  public void ProcessEach()
+  {
+    var dictionarySlim = new MultiValueDictionarySlim<string, int>();
+
+    dictionarySlim.Add("aaa", 11);
+    dictionarySlim.Add("aaa", 22);
+    dictionarySlim.Add("aaa", 33);
+    dictionarySlim.Add("bbb", 111);
+    dictionarySlim.Add("ccc", 1111);
+    dictionarySlim.Add("ccc", 2222);
+    dictionarySlim.Remove("bbb");
+    dictionarySlim.Add("remove_me", 1);
+
+    dictionarySlim.ProcessEach(
+      state: 42,
+      process: (int state, string key, ref MultiValueDictionarySlim<string, int>.MutableValuesCollection collection) =>
+      {
+        Assert.AreEqual(42, state);
+
+        if (key == "aaa")
+        {
+          Assert.AreEqual(3, collection.Count);
+          Assert.IsFalse(collection.IsEmpty);
+
+          Assert.AreEqual(new[] { 11, 22, 33 }, collection.ToArray());
+        }
+        else if (key == "ccc")
+        {
+          Assert.AreEqual(2, collection.Count);
+          Assert.IsFalse(collection.IsEmpty);
+
+          Assert.AreEqual(new[] { 1111, 2222 }, collection.ToArray());
+        }
+        else if (key == "remove_me")
+        {
+          Assert.AreEqual(1, collection.Count);
+          Assert.IsFalse(collection.IsEmpty);
+
+          Assert.AreEqual(new[] { 1 }, collection.ToArray());
+
+          collection.Clear();
+
+          Assert.AreEqual(0, collection.Count);
+          Assert.IsTrue(collection.IsEmpty);
+
+          collection.Clear(); // no-op
+
+          Assert.AreEqual(0, collection.Count);
+          Assert.IsTrue(collection.IsEmpty);
+        }
+        else
+        {
+          Assert.Fail("Must be unreachable");
+        }
+      });
+
+    Assert.IsFalse(dictionarySlim.ContainsKey("remove_me"));
+
+    dictionarySlim.Add("remove_me2", 1);
   }
 
   private string RandomString()

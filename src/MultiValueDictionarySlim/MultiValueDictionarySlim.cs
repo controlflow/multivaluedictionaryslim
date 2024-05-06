@@ -11,8 +11,6 @@ using System.Runtime.CompilerServices;
 
 namespace ControlFlow.Collections;
 
-// todo: enumerate in insertion order + assert
-
 /// <summary>
 /// Represents a dictionary to map <typeparamref name="TKey"/> keys to collections of <typeparamref name="TValue"/> values.
 /// This dictionary is a implementation of `Dictionary{TKey, List{TValue}}` that is optimized:
@@ -20,15 +18,11 @@ namespace ControlFlow.Collections;
 /// 2. To use contiguous memory (arrays) to store both keys and values - this makes this dictionary pooling-friendly.
 ///
 /// Trade-offs:
-/// 1. Generally it consumes more memory and wastes more memory for values. Individual `List{TValue}` instances
-///    expand individually when needed, this dictionary expands the whole array for values
-/// 2. Values are stored as a linked-lists - so no list operatios support, only enumeration + count.
-/// 3. It is more likely for values array to get in
-/// 
-/// This dictionary is optimized for pooling scenarios.
-///
-/// 
-/// All the data is stored in contiguous memory arrays
+/// 1. Generally it consumes (and wastes) more memory. Individual `List{TValue}` instances
+///    grow when needed, while this dictionary grows the whole array for values.
+/// 2. This dictionary also uses 1 `int` per each `TValue` stored (for linked list).
+/// 3. Values are stored as a linked-lists - so no list operatios support, only enumeration + count.
+/// 4. It is more likely for values array to make it into LOH.
 /// </summary>
 /// <typeparam name="TKey">Type of keys</typeparam>
 /// <typeparam name="TValue">Type of values</typeparam>
@@ -64,8 +58,8 @@ public class MultiValueDictionarySlim<TKey, TValue>
     public uint HashCode;
 
     /// <summary>
-    /// 0-based index of next entry in chain: -1 means end of chain
-    /// also encodes whether this entry _itself_ is part of the free list by changing sign and subtracting 3,
+    /// 0-based index of next entry in chain: -1 means end of the chain (no more entries with the same hash code).
+    /// Also encodes whether this entry _itself_ is part of the free list by changing sign and subtracting 3,
     /// so -2 means end of free list, -3 means index 0 but on free list, -4 means index 1 but on free list, etc.
     /// </summary>
     public int Next;
@@ -74,15 +68,19 @@ public class MultiValueDictionarySlim<TKey, TValue>
 
     /// <summary>
     /// 0-based index in <see cref="MultiValueDictionarySlim{TKey,TValue}._values"/> list
+    /// where the first value corresponding to this <see cref="Key"/> is stored.
     /// </summary>
     public int StartIndex;
 
-    // can be 0, can be the same as StartIndex
-    // _index at EndIndex is a Count or collection
-    // can be -1 for allocated incomplete (empty) entries
+    /// <summary>
+    /// 0-based index in <see cref="MultiValueDictionarySlim{TKey,TValue}._values"/> list
+    /// or -1 for incomplete (empty) entries.
+    /// At this index the <see cref="MultiValueDictionarySlim{TKey,TValue}._indexes"/> value
+    /// at this position is a <see cref="ValuesCollection.Count"/> of values.
+    /// </summary>
     public int EndIndex;
 
-    public override string ToString()
+    public readonly override string ToString()
     {
       return $"Entry [key={Key}, start={StartIndex}, end={EndIndex}]";
     }
@@ -254,11 +252,11 @@ public class MultiValueDictionarySlim<TKey, TValue>
     ref var bucket = ref GetBucket(hashCode);
     var entries = _entries!;
     var last = -1;
-    var i = bucket - 1; // Value in buckets is 1-based
+    var index = bucket - 1; // Value in buckets is 1-based
 
-    while (i >= 0)
+    while (index >= 0)
     {
-      ref var entry = ref entries[i];
+      ref var entry = ref entries[index];
 
       if (entry.HashCode == hashCode && (_comparer?.Equals(entry.Key, key) ?? EqualityComparer<TKey>.Default.Equals(entry.Key, key)))
       {
@@ -271,43 +269,14 @@ public class MultiValueDictionarySlim<TKey, TValue>
           entries[last].Next = entry.Next;
         }
 
-        Debug.Assert(
-          StartOfFreeList - _keyFreeList < 0,
-          "shouldn't underflow because max hashtable length is MaxPrimeArrayLength = 0x7FEFFFFD(2146435069) _freelist underflow threshold 2147483646");
-        entry.Next = StartOfFreeList - _keyFreeList;
-
-        if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
-        {
-          entry.Key = default!;
-        }
-
-        if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
-        {
-          // O(n) removal, unfortunately
-          var endIndex = entry.EndIndex;
-          for (var index = entry.StartIndex; index != endIndex; index = _indexes[index])
-          {
-            _values[index] = default!;
-          }
-
-          _values[endIndex] = default!;
-        }
-
-        // append linked list of values to freelist
-        var count = _indexes[entry.EndIndex];
-        _valueFreeCount += count;
-        _indexes[entry.EndIndex] = _valueFreeList;
-        _valueFreeList = entry.StartIndex;
-
-        entry.EndIndex = -1; // mark entry as incomplete
-
-        _keyFreeList = i;
-        _keyFreeCount++;
+        // note: order is important
+        ClearSameKeyValues(entry.StartIndex, entry.EndIndex);
+        RemoveKeyEntryImpl(index, ref entry);
         return true;
       }
 
-      last = i;
-      i = entry.Next;
+      last = index;
+      index = entry.Next;
 
       collisionCount++;
       if (collisionCount > (uint)entries.Length)
@@ -846,7 +815,152 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
+  public void ProcessEach<TState>(TState state, Processor<TState> process)
+  {
+    for (var index = 0; (uint)index < (uint)_keyCount; index++)
+    {
+      ref var entry = ref _entries![index];
+
+      if (entry.Next >= -1)
+      {
+        var valuesCollection = new MutableValuesCollection(this, entry.StartIndex, entry.EndIndex);
+        process(state, entry.Key, ref valuesCollection);
+
+        if (valuesCollection.Count == 0)
+        {
+          RemoveConcreteEntry(ref entry, index);
+        }
+      }
+    }
+
+    return;
+
+    void RemoveConcreteEntry(ref Entry entryToRemove, int indexToRemove)
+    {
+      uint collisionCount = 0;
+      var hashCode = entryToRemove.HashCode;
+
+      ref var bucket = ref GetBucket(hashCode);
+      var entries = _entries!;
+      var last = -1;
+      var index = bucket - 1; // Value in buckets is 1-based
+
+      while (index >= 0)
+      {
+        ref var entry = ref entries[index];
+
+        if (entry.HashCode == hashCode && index == indexToRemove)
+        {
+          if (last < 0)
+          {
+            bucket = entry.Next + 1; // Value in buckets is 1-based
+          }
+          else
+          {
+            entries[last].Next = entry.Next;
+          }
+
+          // note: we expect all the values already be removed
+          RemoveKeyEntryImpl(index, ref entry);
+          return;
+        }
+
+        last = index;
+        index = entry.Next;
+
+        collisionCount++;
+        if (collisionCount > (uint)entries.Length)
+          ThrowHelper.ThrowInvalidOperationException_ConcurrentOperationsNotSupported();
+      }
+    }
+  }
+
+  public delegate void Processor<in TState>(TState state, TKey key, ref MutableValuesCollection collection);
+
+  [DebuggerTypeProxy(typeof(MultiValueDictionarySlimValueListDebugView<,>))]
+  [DebuggerDisplay("Count = {Count}")]
+  public struct MutableValuesCollection
+  {
+    private readonly MultiValueDictionarySlim<TKey, TValue> _dictionary;
+    private readonly int _originalStartIndex;
+    private readonly int _originalEndIndex;
+    private int _endIndex;
+
+    internal MutableValuesCollection(MultiValueDictionarySlim<TKey, TValue> dictionary, int originalStartIndex, int endIndex)
+    {
+      _dictionary = dictionary;
+      _originalStartIndex = originalStartIndex;
+      _originalEndIndex = endIndex;
+      _endIndex = endIndex;
+    }
+
+    public readonly int Count => _endIndex < 0 ? 0 : _dictionary._indexes[_endIndex];
+    public readonly bool IsEmpty => _endIndex < 0;
+
+    public readonly ValuesCollection.ValuesEnumerator GetEnumerator()
+    {
+      return new ValuesCollection.ValuesEnumerator(_dictionary, _originalStartIndex, _endIndex);
+    }
+
+    public readonly TValue[] ToArray()
+    {
+      var valuesCollection = new ValuesCollection(_dictionary, _originalStartIndex, _endIndex);
+      return valuesCollection.ToArray();
+    }
+
+    public void Clear()
+    {
+      if (_endIndex < 0) return; // already empty
+
+      _dictionary.ClearSameKeyValues(_originalStartIndex, _endIndex);
+      _endIndex = -1;
+    }
+  }
+
   //////////////////////////////////////////////////////////////
+
+  private void RemoveKeyEntryImpl(int entryIndex, ref Entry entry)
+  {
+    Debug.Assert(
+      StartOfFreeList - _keyFreeList < 0,
+      "shouldn't underflow because max hashtable length is MaxPrimeArrayLength = " +
+      "0x7FEFFFFD(2146435069) _freelist underflow threshold 2147483646");
+
+    entry.Next = StartOfFreeList - _keyFreeList;
+
+    if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TKey>())
+    {
+      entry.Key = default!;
+    }
+
+    entry.EndIndex = -1; // mark entry as incomplete
+
+    _keyFreeList = entryIndex;
+    _keyFreeCount++;
+  }
+
+  private void ClearSameKeyValues(int startIndex, int endIndex)
+  {
+    Debug.Assert(startIndex >= 0);
+    Debug.Assert(endIndex >= 0);
+
+    if (MyRuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+    {
+      // O(n) removal, unfortunately
+      for (var index = startIndex; index != endIndex; index = _indexes[index])
+      {
+        _values[index] = default!;
+      }
+
+      _values[endIndex] = default!;
+    }
+
+    // append whole linked list of values to freelist
+    var count = _indexes[endIndex];
+    _valueFreeCount += count;
+    _indexes[endIndex] = _valueFreeList;
+    _valueFreeList = startIndex;
+  }
 
   private void Initialize(int capacity)
   {
@@ -1284,6 +1398,115 @@ public class MultiValueDictionarySlim<TKey, TValue>
     }
   }
 
+  [Conditional("DEBUG")]
+  public void VerifyConsistency()
+  {
+    var usedValuesIndexes = new HashSet<int>();
+
+    var entries = _entries;
+    if (entries != null)
+    {
+      var keyIsOfReferenceType = !typeof(TKey).IsValueType;
+      var freelistIndexes = new HashSet<int>();
+      var occupiedKeysCount = 0;
+
+      for (var index = 0; index < entries.Length; index++)
+      {
+        var entry = entries[index];
+
+        if (index < _keyCount)
+        {
+          if (entry.Next >= -1) // occupied entry
+          {
+            if (keyIsOfReferenceType) Assert(!ReferenceEquals(entry.Key, null));
+
+            occupiedKeysCount++;
+
+            Assert(entry.StartIndex >= 0);
+            Assert(entry.EndIndex >= 0);
+
+            for (int valueIndex = entry.StartIndex, valuesCount = 0; ; valueIndex = _indexes[valueIndex])
+            {
+              Assert(usedValuesIndexes.Add(valueIndex));
+              valuesCount++;
+
+              if (valueIndex == entry.EndIndex)
+              {
+                Assert(_indexes[valueIndex] == valuesCount);
+                break;
+              }
+            }
+          }
+          else // freelist entry
+          {
+            Assert(entry.EndIndex == -1);
+
+            if (keyIsOfReferenceType) Assert(ReferenceEquals(entry.Key, null));
+
+            freelistIndexes.Add(index);
+          }
+        }
+        else // not allocated entry
+        {
+          Assert(entry.Next == 0);
+
+          if (keyIsOfReferenceType) Assert(ReferenceEquals(entry.Key, null));
+        }
+      }
+
+      Assert(occupiedKeysCount == Count);
+      Assert(freelistIndexes.Count == _keyFreeCount);
+
+      if (freelistIndexes.Count > 0)
+      {
+        var freeIndex = _keyFreeList;
+        do
+        {
+          Assert(freelistIndexes.Remove(freeIndex));
+          freeIndex = StartOfFreeList - entries[freeIndex].Next;
+        }
+        while (freeIndex >= 0);
+
+        Assert(freeIndex == -1);
+        Assert(freelistIndexes.Count == 0);
+      }
+      else
+      {
+        Assert(_keyFreeList == -1);
+        Assert(_keyFreeCount == 0);
+      }
+    }
+    else
+    {
+      Assert(_keyFreeList == 0); // not initialized
+      Assert(_keyFreeCount == 0);
+    }
+
+    var values = _values;
+    var valueIsOfReferenceType = !typeof(TValue).IsValueType;
+
+    Assert(ValuesCount == usedValuesIndexes.Count);
+
+    for (var valueIndex = 0; valueIndex < values.Length; valueIndex++)
+    {
+      if (usedValuesIndexes.Contains(valueIndex))
+      {
+        // occupied value slot
+      }
+      else
+      {
+        if (valueIsOfReferenceType) Assert(ReferenceEquals(values[valueIndex], null));
+      }
+    }
+
+    return;
+
+    void Assert(bool condition)
+    {
+      if (!condition) throw new InvalidOperationException();
+    }
+  }
+
   [SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
   internal readonly struct DebugPair(TKey key, TValue[] values)
   {
@@ -1324,9 +1547,22 @@ file sealed class MultiValueDictionarySlimDebugView<TKey, TValue>(MultiValueDict
 }
 
 [SuppressMessage("ReSharper", "UnusedMember.Local")]
-file class MultiValueDictionarySlimValueListDebugView<TKey, TValue>(MultiValueDictionarySlim<TKey, TValue>.ValuesCollection valuesCollection)
+[SuppressMessage("ReSharper", "UnusedAutoPropertyAccessor.Local")]
+file class MultiValueDictionarySlimValueListDebugView<TKey, TValue>
   where TKey : notnull
 {
+  public MultiValueDictionarySlimValueListDebugView(
+    MultiValueDictionarySlim<TKey, TValue>.ValuesCollection valuesCollection)
+  {
+    Entries = valuesCollection.ToArray();
+  }
+
+  public MultiValueDictionarySlimValueListDebugView(
+    MultiValueDictionarySlim<TKey, TValue>.MutableValuesCollection mutableValuesCollection)
+  {
+    Entries = mutableValuesCollection.ToArray();
+  }
+
   [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-  public TValue[] Entries => valuesCollection.ToArray();
+  public TValue[] Entries { get; }
 }
