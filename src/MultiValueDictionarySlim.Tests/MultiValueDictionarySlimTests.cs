@@ -6,8 +6,7 @@ namespace ControlFlow.Collections.Tests;
 
 public class MultiValueDictionarySlimTests
 {
-  //private readonly Random _random = new();
-  private readonly Random _random = new(43435);
+  private readonly Random _random = new();
 
   [Test]
   [TestCase(false)]
