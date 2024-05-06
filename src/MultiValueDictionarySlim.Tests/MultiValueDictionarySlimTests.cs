@@ -247,9 +247,6 @@ public class MultiValueDictionarySlimTests
         case 17:
         {
           var key = _random.Next(0, keysPerCollection);
-
-          
-
           var enumerable = RandomValuesCollection(out var count);
           var valuesCountBefore = dictionarySlim.ValuesCount;
 
