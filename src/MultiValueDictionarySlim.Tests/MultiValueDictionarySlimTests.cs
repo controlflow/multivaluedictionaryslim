@@ -9,9 +9,7 @@ public class MultiValueDictionarySlimTests
   private readonly Random _random = new();
 
   [Test]
-  [TestCase(false)]
-  [TestCase(true)]
-  public void SimpleOperations(bool useComparer)
+  public void SimpleOperations([Values(false, true)] bool useComparer)
   {
     var dictionary = useComparer
       ? new MultiValueDictionarySlim<int, string>(CustomIntComparer.Instance)
@@ -611,9 +609,11 @@ public class MultiValueDictionarySlimTests
   }
 
   [Test]
-  public void InsertionOrder()
+  public void InsertionOrder([Values(false, true)] bool dumbComparer)
   {
-    var dictionarySlim = new MultiValueDictionarySlim<string, int>();
+    var dictionarySlim = dumbComparer
+      ? new MultiValueDictionarySlim<string, int>(DumbEqualityComparer<string>.Instance)
+      : new MultiValueDictionarySlim<string, int>();
 
     Assert.AreEqual(0, dictionarySlim.Values.Count);
     Assert.IsFalse(dictionarySlim.Values.GetEnumerator().MoveNext());
