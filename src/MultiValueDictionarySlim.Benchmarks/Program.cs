@@ -11,8 +11,7 @@ class Benchmarks
 {
   public Benchmarks()
   {
-    Collection<int> xs;
-    xs.Add();
+    
   }
 
   [Benchmark]
@@ -20,7 +19,7 @@ class Benchmarks
   {
     var dictionary = new MultiValueDictionarySlim<int, string>();
   }
-  
+
   [Benchmark]
   public void Ordinary()
   {

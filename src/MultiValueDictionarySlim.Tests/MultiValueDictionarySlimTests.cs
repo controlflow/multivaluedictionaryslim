@@ -739,8 +739,6 @@ public class MultiValueDictionarySlimTests
       });
 
     Assert.IsFalse(dictionarySlim.ContainsKey("remove_me"));
-
-    dictionarySlim.Add("remove_me2", 1);
   }
 
   private string RandomString()
