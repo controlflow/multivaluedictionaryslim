@@ -1,5 +1,26 @@
-﻿// See https://aka.ms/new-console-template for more information
+﻿using System.Collections.Generic;
+using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Running;
+using ControlFlow.Collections;
 
-using System;
+BenchmarkRunner.Run<Benchmarks>();
 
-Console.WriteLine("Hello, World!");
+class Benchmarks
+{
+  public Benchmarks()
+  {
+    
+  }
+
+  [Benchmark]
+  public void Slim()
+  {
+    var dictionary = new MultiValueDictionarySlim<int, string>();
+  }
+  
+  [Benchmark]
+  public void Ordinary()
+  {
+    var dictionary = new Dictionary<int, List<string>>();
+  }
+}
