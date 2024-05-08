@@ -1,6 +1,8 @@
 # `MultiValueDictionarySlim` collection
 
-This repo consists the implementation of the multi-map data structure - a dictionary that maps a single key to multiple values. In .NET there is no such data structure available in the BCL, except there is a `ILookup` interface and `.ToLookup()` that represents the same concept, but do not expose the multi-map data structure.
+This repo consists the implementation of the multi-map data structure - a dictionary that maps a single key to multiple values. In .NET there is no such data structure available in the BCL.
+
+, except there is a `ILookup` interface and `.ToLookup()` that represents the same concept, but do not expose the multi-map data structure.
 
 now obsolete `MultiValueDictionary`.
 
@@ -10,17 +12,17 @@ Best-used when most pairs are 1:1, but some keys have N values.
 The more N gets - the more memory consumes.
 Integers instead of 64bit pointers.
 
+* integers rather than pointers are 1) smaller and 2) nicer for GC
+
 ## Memory layout
 
 Let's compare the data structure memory layout using the `Dictionary<TKey, List<TValue>>` for comparison:
 
 ![](docs/slide2.png)
 
-The biggest advantage of the `MultiValueDictionarySlim<TKey, TValue>` memory layout is that the amount of retained heap objects count is not dependent on the amount of keys and values stored in the data structure:
+The biggest advantage of the `MultiValueDictionarySlim<TKey, TValue>` memory layout is that the amount of retained heap objects count is not dependent on the amount of keys and values stored in the data structure, it always represented by just 5 heap objects:
 
 ![](docs/slide1.png)
-
-
 
 ## Trade-offs
 
@@ -44,7 +46,7 @@ The biggest advantage of the `MultiValueDictionarySlim<TKey, TValue>` memory lay
 
 ## Other notes
 
-Just like with `Dictionary`, the `MultiValueDictionarySlim` data structure preserves the order of keys on enumeration, but the order is guaranteed if multi-map is only used to add key-value pairs and optionally to remove some keys after all the additions (without more additions). So for:
+* Just like with `Dictionary`, the `MultiValueDictionarySlim` data structure preserves the order of keys on enumeration, but the order is guaranteed if multi-map is only used to add key-value pairs and optionally to remove some keys after all the additions (without more additions). So for:
 
 ```c#
 var dictionary = new MultiValueDictionarySlim<int, string>();
@@ -63,8 +65,4 @@ foreach (var (key, values) in dictionary)
 }
 ```
 
-
-* enumeration order is preserved when you only add (and possibly removes)
-* implementation is based on .NET Core's Dictionary<,> implementation, may be suboptimal for .NET Framework
-* integers rather than pointers are 1) smaller and 2) nicer for GC
-* memory is not fried for removed keys
+* Hash map implementation is based on the latest .NET Core's `Dictionary<TKey, TValue>` implementation, the code may be suboptimal for .NET Framework targets due to JIT differences.
