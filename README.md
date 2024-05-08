@@ -26,11 +26,22 @@ The biggest advantage of the `MultiValueDictionarySlim<TKey, TValue>` memory lay
 
 * The values corresponding to key are stored as a linked list (inside an array), so unlike `List<TValue>` there is no `O(1)` by index access available. You can only enumerate the values, get their count, add more to the tail of the list and clear all the values (by removing the key). So `MultiValueDictionarySlim<TKey, TValue>` is more comparable to `Dictionary<TKey, Collection<TValue>>`.
 
-* Unlike with `Dictionary<TKey, List<TValue>>` there is no way to get a reference to the collection values for some specific key and use it separately - as a standalone object.
+* Removal of the key is a relatively slow `O(N)` operation (where `N` is the amount of values corresponding to this key) if `TValue` is of reference type. In this case we have to traverse the linked list of values and assign `null` to values to release the objects referenced. In `Dictionary<TKey, List<TValue>>` the key removal just releases the reference to corresponding `List<TValue>` instance and the rest is done by the GC, no need to assign `null`s.
+
+* Generally `MultiValueDictionarySlim` consumes more memory to store the same data represented as a `Dictionary<TKey, List<TValue>>`.
+
+* The memory allocated to store both key and the corresponding values are not released when key is removed from the `MultiValueDictionarySlim`. This memory will be reused for next inserts of the keys/values, but in the case there will be no more inserts - this memory will remain wasted. Note that this is also the case for ordinary `Dictionary<TKey, TValue>` (key-value entry remains allocated for future inserts), but the situation with `Dictionary<TKey, List<TValue>>` is better - key-value pair removal releases the reference to `List<TValue>` and GC actually reclaims the memory occupied by the values.
+
+
+
+
+`TrimExcessKeys` and 
+
+* Unlike with `Dictionary<TKey, List<TValue>>` there is no way to get a reference to the collection values for some specific key and use it separately - as a standalone object. This can be quite useful sometimes, but with this design it's hard for the owner multi-map to enforce any kind of logical/performance guarantees (especially if values `List<TValue>` is mutable).  
 
 * The `MultiValueDictionarySlim` data structure do not support keys without the corresponding values. This is possible in `Dictionary<TKey, List<TValue>>` by having a key corresponding to empty `List<TValue>` instance - this may be useful sometimes, but generally it's not a good state of multi-map to support.
 
-* Removal of the key is a relatively slow `O(N)` operation (where `N` is the amount of values corresponding to this key) if `TValue` is of reference type. In this case we have to traverse the linked list of values and assign `null` to values to release the objects referenced. In `Dictionary<TKey, List<TValue>>` the key removal just releases the reference to corresponding `List<TValue>` instance and the rest is done by the GC, no need to assign `null`s.
+
 
 
 
