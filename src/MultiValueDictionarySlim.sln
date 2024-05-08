@@ -4,6 +4,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MultiValueDictionarySlim", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MultiValueDictionarySlim.Tests", "MultiValueDictionarySlim.Tests\MultiValueDictionarySlim.Tests.csproj", "{95011173-C785-4BB5-91B8-0EDE70F9BE4E}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Docs", "Docs", "{4E505796-E497-4D98-A9B5-818D93D14C4B}"
+	ProjectSection(SolutionItems) = preProject
+		..\README.md = ..\README.md
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MultiValueDictionarySlim.Benchmarks", "MultiValueDictionarySlim.Benchmarks\MultiValueDictionarySlim.Benchmarks.csproj", "{0BDB28C2-D0F3-4D54-A824-3341517C6A4A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -18,5 +25,9 @@ Global
 		{95011173-C785-4BB5-91B8-0EDE70F9BE4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{95011173-C785-4BB5-91B8-0EDE70F9BE4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{95011173-C785-4BB5-91B8-0EDE70F9BE4E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0BDB28C2-D0F3-4D54-A824-3341517C6A4A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0BDB28C2-D0F3-4D54-A824-3341517C6A4A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0BDB28C2-D0F3-4D54-A824-3341517C6A4A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0BDB28C2-D0F3-4D54-A824-3341517C6A4A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
