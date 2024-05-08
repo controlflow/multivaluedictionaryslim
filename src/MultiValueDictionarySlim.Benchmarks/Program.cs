@@ -1,7 +1,9 @@
 ﻿using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using ControlFlow.Collections;
+using Microsoft.VisualBasic;
 
 BenchmarkRunner.Run<Benchmarks>();
 
@@ -9,7 +11,8 @@ class Benchmarks
 {
   public Benchmarks()
   {
-    
+    Collection<int> xs;
+    xs.Add();
   }
 
   [Benchmark]
