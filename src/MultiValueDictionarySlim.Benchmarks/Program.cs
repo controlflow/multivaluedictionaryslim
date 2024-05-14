@@ -1,19 +1,23 @@
-﻿using System.Collections.Generic;
-using System.Collections.ObjectModel;
+﻿using System;
+using System.Collections.Generic;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using ControlFlow.Collections;
-using Microsoft.VisualBasic;
 
-BenchmarkRunner.Run<Benchmarks>();
+BenchmarkRunner.Run<AdditionNoPooling>();
 
-class Benchmarks
+public class AdditionNoPooling
 {
-  public Benchmarks()
+  private readonly (int, string)[] myItems;
+
+  public AdditionNoPooling()
   {
+    var random = new Random(42);
+
+    
     
   }
-
+  
   [Benchmark]
   public void Slim()
   {
