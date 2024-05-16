@@ -5,10 +5,10 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using ControlFlow.Collections;
 
-//BenchmarkRunner.Run<AdditionBenchmarkNoPooling>();
+BenchmarkRunner.Run<AdditionBenchmarkNoPooling>();
 //BenchmarkRunner.Run<AdditionBenchmarkNoPoolingFewKeys>();
 //BenchmarkRunner.Run<AdditionBenchmarkNoPoolingOneToOneKeys>();
-BenchmarkRunner.Run<AdditionBenchmarkPooling>();
+//BenchmarkRunner.Run<AdditionBenchmarkPooling>();
 
 [MemoryDiagnoser]
 //[SimpleJob(RuntimeMoniker.Net80)]
