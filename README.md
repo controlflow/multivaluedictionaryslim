@@ -1,18 +1,12 @@
 # `MultiValueDictionarySlim` collection
 
-This repo consists the implementation of the multi-map data structure - a dictionary that maps a single key to multiple values. In .NET there is no such data structure available in the BCL.
+This repo consists the implementation of the multi-map data structure - a dictionary that maps a single key to multiple values. In .NET there is no such data structure available in the .NET base class library. Usually developers use `Dictionary<TKey, List<TValue>>` collection to implement multi-maps, but this comes with usability problems and associated performance costs.
 
-, except there is a `ILookup` interface and `.ToLookup()` that represents the same concept, but do not expose the multi-map data structure.
+LINQ APIs also comes with a `ILookup<TKey, TValue>` interface (and `.ToLookup()` extension method) that represents multi-map like data structure, but it does not allow the general multi-map operations to be performed like we can do with the ordinary collection classes.
 
-now obsolete `MultiValueDictionary`.
+Back in the days Microsoft shipped the [`MultiValueDictionary` package](https://devblogs.microsoft.com/dotnet/multidictionary-becomes-multivaluedictionary/) with a multi-map data structure, but it's deprecated now. The implementation generally was pretty much similar to `Dictionary<TKey, List<TValue>>`, except it allows to change the underlying data structure for values collections (for example, using `HashSet<TValue>` instead).
 
-`ILookup`
-
-Best-used when most pairs are 1:1, but some keys have N values.
-The more N gets - the more memory consumes.
-Integers instead of 64bit pointers.
-
-* integers rather than pointers are 1) smaller and 2) nicer for GC
+The `MultiValueDictionarySlim<TKey, TValue>` data structure from this repo is a specialized multi-map implementation that is intended to replace `Dictionary<TKey, List<TValue>>`-like multi-maps in scenarios where memory allocation patterns are important.
 
 ## Memory layout
 
@@ -66,3 +60,57 @@ foreach (var (key, values) in dictionary)
 ```
 
 * Hash map implementation is based on the latest .NET Core's `Dictionary<TKey, TValue>` implementation, the code may be suboptimal for .NET Framework targets due to JIT differences.
+
+## Benchmark
+
+Additions of different number of key-value pairs, with up to 20 unique keys, followed by enumeration of the grouped data. `MultiValueDictionarySlim` generally is a bit slower comparing to `Dictionary<TKey, List<TValue>` and induces generally the same memory pressure. Except when the amount of items gets much bigger, big internal arrays of `MultiValueDictionarySlim` are starting to degrade the performance and affect memory traffic:
+
+| Method   | ItemsCount |         Mean |       Error |      StdDev |    Gen0 |    Gen1 |    Gen2 | Allocated |
+|----------|------------|-------------:|------------:|------------:|--------:|--------:|--------:|----------:|
+| Slim     | 10         |     266.8 ns |     5.39 ns |    12.07 ns |  0.1097 |       - |       - |     920 B |
+| Ordinary | 10         |     281.6 ns |     5.63 ns |     9.85 ns |  0.1287 |  0.0005 |       - |    1080 B |
+| Slim     | 100        |   2,128.9 ns |    39.31 ns |    34.85 ns |  0.6142 |  0.0076 |       - |    5160 B |
+| Ordinary | 100        |   1,700.6 ns |    23.61 ns |    19.72 ns |  0.5989 |  0.0076 |       - |    5024 B |
+| Slim     | 1000       |  16,592.5 ns |   162.51 ns |   135.70 ns |  3.2043 |  0.2136 |       - |   26808 B |
+| Ordinary | 1000       |  10,829.4 ns |   187.57 ns |   175.45 ns |  3.0975 |  0.1678 |       - |   26008 B |
+| Slim     | 10000      | 225,620.1 ns | 1,011.73 ns |   789.89 ns | 41.5039 | 41.5039 | 41.5039 |  395654 B |
+| Ordinary | 10000      |  87,551.7 ns | 1,253.61 ns | 1,111.29 ns | 27.0996 |  8.9111 |       - |  227272 B |
+
+The same benchmark when instances of dictionaries are pooled (shared between iterations, cleared before each benchmark) shows the general advantage of `MultiValueDictionarySlim` - when pooled properly it shows comparable performance while completely avoiding memory traffic:
+
+| Method   | ItemsCount |         Mean |       Error |      StdDev |    Gen0 |   Gen1 | Allocated |
+|----------|------------|-------------:|------------:|------------:|--------:|-------:|----------:|
+| Slim     | 10         |     143.0 ns |     0.73 ns |     0.57 ns |       - |      - |         - |
+| Ordinary | 10         |     268.8 ns |     4.82 ns |     4.51 ns |  0.0734 |      - |     616 B |
+| Slim     | 100        |   1,227.5 ns |    17.80 ns |    16.65 ns |       - |      - |         - |
+| Ordinary | 100        |   1,491.8 ns |    29.49 ns |    31.55 ns |  0.3510 | 0.0019 |    2944 B |
+| Slim     | 1000       |  11,728.5 ns |   184.64 ns |   172.71 ns |       - |      - |         - |
+| Ordinary | 1000       |  11,021.1 ns |    85.83 ns |    80.29 ns |  2.8534 | 0.1373 |   23928 B |
+| Slim     | 10000      | 134,873.8 ns | 1,048.90 ns |   818.91 ns |       - |      - |         - |
+| Ordinary | 10000      |  87,601.1 ns | 1,559.34 ns | 1,795.74 ns | 26.8555 | 6.7139 |  225192 B |
+
+If your keys almost always have one value associated, then `MultiValueDictionarySlim` is also better since it do not allocate `List<TValue>` instance for each key to store a single value:
+
+| Method   | ItemsCount |         Mean |        Error |       StdDev |     Gen0 |     Gen1 |     Gen2 |  Allocated |
+|----------|------------|-------------:|-------------:|-------------:|---------:|---------:|---------:|-----------:|
+| Slim     | 10         |     373.1 ns |      7.42 ns |     11.11 ns |   0.1655 |   0.0005 |        - |    1.35 KB |
+| Ordinary | 10         |     425.1 ns |      8.57 ns |     20.04 ns |   0.2232 |   0.0010 |        - |    1.83 KB |
+| Slim     | 100        |   3,557.1 ns |     63.79 ns |     53.27 ns |   1.4496 |   0.0420 |        - |   11.85 KB |
+| Ordinary | 100        |   4,070.3 ns |     79.23 ns |     94.32 ns |   2.2659 |   0.1373 |        - |   18.55 KB |
+| Slim     | 1000       |  36,373.4 ns |    685.48 ns |    641.20 ns |  13.4277 |   2.9907 |        - |  110.05 KB |
+| Ordinary | 1000       |  44,076.4 ns |    874.71 ns |    818.20 ns |  22.7051 |  11.2915 |        - |  185.76 KB |
+| Slim     | 10000      | 598,848.6 ns | 11,112.62 ns | 10,394.75 ns | 199.2188 | 199.2188 | 199.2188 | 1173.29 KB |
+| Ordinary | 10000      | 752,794.6 ns | 15,039.82 ns | 15,444.79 ns | 221.6797 | 221.6797 | 221.6797 | 1779.38 KB |
+
+If you instead use a very few amount of keys with a lot of values associated, the linked list nature of `MultiValueDictionarySlim` perf is generally worse comparing to `Dictionary<TKey, List<TValue>`:
+
+| Method   | ItemsCount |         Mean |       Error |      StdDev |    Gen0 |    Gen1 |    Gen2 | Allocated |
+|----------|------------|-------------:|------------:|------------:|--------:|--------:|--------:|----------:|
+| Slim     | 10         |     209.4 ns |     2.81 ns |     2.49 ns |  0.0832 |       - |       - |     696 B |
+| Ordinary | 10         |     191.8 ns |     2.92 ns |     2.59 ns |  0.0677 |       - |       - |     568 B |
+| Slim     | 100        |   1,752.2 ns |    22.17 ns |    18.51 ns |  0.4215 |  0.0038 |       - |    3528 B |
+| Ordinary | 100        |   1,120.3 ns |    18.46 ns |    17.27 ns |  0.2975 |       - |       - |    2504 B |
+| Slim     | 1000       |  16,260.8 ns |   316.15 ns |   338.28 ns |  2.9907 |  0.1831 |       - |   25176 B |
+| Ordinary | 1000       |   8,270.5 ns |   147.93 ns |   138.37 ns |  2.0294 |  0.0458 |       - |   16984 B |
+| Slim     | 10000      | 229,566.9 ns | 4,525.52 ns | 4,842.26 ns | 41.5039 | 41.5039 | 41.5039 |  394022 B |
+| Ordinary | 10000      |  83,991.1 ns | 1,628.16 ns | 2,059.10 ns | 31.2500 |       - |       - |  262936 B |
